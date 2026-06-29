@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Light — AI Agent 桌面状态伴侣</title>
+    <meta
+      name="description"
+      content="Agent Light：桌宠、RGB 灯与云端同步，让你离开终端也能一眼看懂 AI Agent 正在做什么。"
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="bg-glow bg-glow--blue" aria-hidden="true"></div>
+    <div class="bg-glow bg-glow--green" aria-hidden="true"></div>
+
+    <header class="topbar">
+      <a class="brand" href="/">
+        <img src="/favicon.svg" alt="" width="28" height="28" />
+        <span>Agent Light</span>
+      </a>
+      <nav class="topbar__nav">
+        <a href="#features">功能</a>
+        <a href="#status">状态</a>
+        <a href="#cloud">云端</a>
+        <a href="#download">下载</a>
+      </nav>
+      <span class="status-pill" id="health-pill" data-state="checking">检测中…</span>
+    </header>
+
+    <main>
+      <section class="hero">
+        <p class="eyebrow">Win / Mac 桌面 · 本地 API · 微信云托管</p>
+        <h1>
+          不用盯着终端，<br />
+          也知道 Agent 在干什么
+        </h1>
+        <p class="hero__lead">
+          Agent Light 是面向 AI coding agent 的桌面状态伴侣：透明桌宠、ESP32 RGB
+          灯、CLI/API 集成，以及运行在<strong>同一云托管域名</strong>上的账号与 Token 排行榜。
+        </p>
+        <div class="hero__actions">
+          <a class="btn btn--primary" href="#download">下载桌面端</a>
+          <a class="btn btn--ghost" href="#cloud">连接本服务</a>
+        </div>
+        <div class="hero__pet" aria-hidden="true">
+          <div class="lamp lamp--standby"></div>
+          <div class="lamp lamp--working"></div>
+          <div class="lamp lamp--completed"></div>
+          <div class="lamp lamp--attention"></div>
+        </div>
+      </section>
+
+      <section class="section" id="features">
+        <h2>为什么需要 Agent Light</h2>
+        <div class="grid grid--3">
+          <article class="card">
+            <h3>桌宠始终可见</h3>
+            <p>置顶透明窗口，可拖到桌面任意位置。蓝 / 黄 / 绿 / 红四种状态，对应待命、工作中、已完成、需关注。</p>
+          </article>
+          <article class="card">
+            <h3>脚本与 CLI 集成</h3>
+            <p>
+              本地 <code>POST /api/state</code> 与
+              <code>agent-light state completed "Done"</code>，让自动化流程也能更新状态。
+            </p>
+          </article>
+          <article class="card">
+            <h3>可选实体 RGB</h3>
+            <p>ESP32 USB 串口驱动同一套状态语义；硬件失败不会拖垮桌面体验。</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section section--alt" id="status">
+        <h2>四种标准状态</h2>
+        <div class="status-grid">
+          <div class="status-chip" data-color="standby">
+            <span class="dot"></span>
+            <div>
+              <strong>standby</strong>
+              <span>蓝色 · 等待任务</span>
+            </div>
+          </div>
+          <div class="status-chip" data-color="working">
+            <span class="dot"></span>
+            <div>
+              <strong>working</strong>
+              <span>黄色 · 正在执行</span>
+            </div>
+          </div>
+          <div class="status-chip" data-color="completed">
+            <span class="dot"></span>
+            <div>
+              <strong>completed</strong>
+              <span>绿色 · 完成待确认</span>
+            </div>
+          </div>
+          <div class="status-chip" data-color="attention">
+            <span class="dot"></span>
+            <div>
+              <strong>attention</strong>
+              <span>红色 · 需要人工介入</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="cloud">
+        <h2>微信云托管 · 同一域名</h2>
+        <p class="section__lead">
+          本页面与 API 运行在同一容器内。桌面端「设置 → 账号 → 服务端地址」填写下方域名即可登录、同步 Token 排行榜。
+        </p>
+        <div class="cloud-box">
+          <label for="server-url">服务端地址（复制到桌面端）</label>
+          <div class="cloud-box__row">
+            <code id="server-url"></code>
+            <button type="button" class="btn btn--small" id="copy-url">复制</button>
+          </div>
+          <p class="cloud-box__hint">
+            健康检查：<a id="health-link" href="/health">/health</a> · API 前缀：<code>/api/*</code>
+          </p>
+        </div>
+      </section>
+
+      <section class="section section--alt" id="download">
+        <h2>获取桌面端</h2>
+        <div class="grid grid--2">
+          <article class="card">
+            <h3>GitHub 开源</h3>
+            <p>AGPL-3.0 许可。支持 Windows / macOS Tauri 桌面应用，本地 loopback API 与可选云端能力。</p>
+            <a
+              class="btn btn--ghost"
+              href="https://github.com/KY-0426/agentlight"
+              target="_blank"
+              rel="noopener noreferrer"
+              >查看仓库</a
+            >
+          </article>
+          <article class="card">
+            <h3>从源码构建</h3>
+            <pre><code>git clone https://github.com/KY-0426/agentlight.git
+cd agentlight
+npm install
+npm run tauri dev</code></pre>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>Agent Light · AI Agent 桌面状态伴侣</p>
+      <p>
+        <a href="https://github.com/KY-0426/agentlight" target="_blank" rel="noopener noreferrer">GitHub</a>
+        · <a href="/health">/health</a>
+        · 运行于微信云托管
+      </p>
+    </footer>
+
+    <script src="/site.js" defer></script>
+  </body>
+</html>

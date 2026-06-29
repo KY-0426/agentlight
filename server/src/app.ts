@@ -10,6 +10,7 @@ import { createDb } from "./db";
 import { DrizzleAuthRepository, type AuthRepository } from "./auth/repository";
 import { registerAuthRoutes } from "./auth/routes";
 import { registerMvpRoutes } from "./api/routes";
+import { registerWebsite } from "./website/register";
 
 export type BuildAppOptions = {
   env?: NodeJS.ProcessEnv;
@@ -58,6 +59,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.get("/api/health", async () => healthPayload(env));
   await registerAuthRoutes(app, { env, repository: authRepository });
   await registerMvpRoutes(app, { env, repository: authRepository });
+  await registerWebsite(app);
 
   return app;
 }
