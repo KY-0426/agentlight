@@ -93,3 +93,9 @@ npm run tauri:build:macos
 macOS DMG cannot be built on Windows. Use a Mac, or push a `v*` tag to trigger the GitHub Actions `Release` workflow.
 
 For browser-only frontend preview, use `npm run dev`. Browser preview does not validate the Tauri WebView, window permissions, or the Rust local API.
+
+## License
+
+This project is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
+
+AGPL-3.0 is a strong copyleft license: you may use, modify, and distribute this software, but derivative works and network-deployed services must also release their complete corresponding source code under the same license. See [LICENSE](LICENSE) for the full text.
