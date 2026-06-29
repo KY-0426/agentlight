@@ -1,0 +1,26 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1782216293659,
+      "tag": "0000_spooky_wallow",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1782302400000,
+      "tag": "0001_agent_provider_phone_registration",
+      "breakpoints": true
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782664000000,
+      "tag": "0002_add_cursor_agent_provider",
+      "breakpoints": true
+    }
+  ]
+}
