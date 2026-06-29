@@ -89,7 +89,7 @@ function applyLocalCorsHeaders(request: FastifyRequest, reply: FastifyReply) {
 
   reply.header("Access-Control-Allow-Origin", origin);
   reply.header("Vary", "Origin");
-  reply.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  reply.header("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS");
   reply.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
   reply.header("Access-Control-Max-Age", "7200");
 }

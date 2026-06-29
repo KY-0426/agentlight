@@ -700,6 +700,8 @@ export async function updateCloudDisplayName(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ display_name: trimmed }),
+  }).catch(() => {
+    throw new Error("无法连接云端，请检查网络或服务端地址");
   });
 
   const payload = await readJsonPayload(response);

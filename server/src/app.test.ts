@@ -83,6 +83,25 @@ describe("server app", () => {
     await app.close();
   });
 
+  it("allows PATCH preflight for desktop profile updates", async () => {
+    const app = await buildApp({ env: testEnv });
+    const response = await app.inject({
+      method: "OPTIONS",
+      url: "/api/me",
+      headers: {
+        origin: "https://tauri.localhost",
+        "access-control-request-method": "PATCH",
+        "access-control-request-headers": "authorization, content-type",
+      },
+    });
+
+    expect(response.statusCode).toBe(204);
+    expect(response.headers["access-control-allow-origin"]).toBe("https://tauri.localhost");
+    expect(response.headers["access-control-allow-methods"]).toContain("PATCH");
+
+    await app.close();
+  });
+
   it("redacts auth and token-bearing log fields", () => {
     const options = buildLoggerOptions({
       nodeEnv: "test",
