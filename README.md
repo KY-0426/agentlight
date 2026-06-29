@@ -20,7 +20,7 @@ This project now follows spec-mode development. Start here:
 
 - Win/Mac desktop app (Tauri v2).
 - Floating transparent desktop pet window, not a standalone web page. The pet window can be dragged freely around the desktop.
-- Pet artwork uses PNG frame sequences under `public/assets/pet-frames/` (run `npm run assets:placeholder` on a fresh clone until final art lands).
+- Pet artwork uses PNG frame sequences under `public/assets/pet-frames/` (committed in repo; run `npm run assets:placeholder` only when those files are missing).
 - Optional cloud features via `server/` (Fastify `:8787`): phone login, token leaderboard, usage sync.
 - ESP32 RGB firmware lives in `firmware/agent_light_esp32_rgb` and expects the RGB LED on GPIO `1/2/3` plus `GND`.
 - When the pet is away from the top edge, a temporary yellow hardware-style cube appears above its head for alignment and animation feedback. When the pet is placed near the top edge, the cube disappears so it can visually line up with the real lamp.
@@ -42,7 +42,6 @@ Legacy aliases are accepted by the CLI/API and normalized in responses:
 
 ```bash
 npm install
-npm run assets:placeholder
 npm run tauri dev
 ```
 

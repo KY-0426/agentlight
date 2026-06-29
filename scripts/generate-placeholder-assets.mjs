@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import zlib from "node:zlib";
@@ -78,6 +78,19 @@ function createSolidPng(width, height, [red, green, blue]) {
 async function writePng(filePath, color) {
   const png = createSolidPng(64, 64, color);
   await writeFile(filePath, png);
+}
+
+const probeFrame = path.join(framesDir, "standby-01.png");
+try {
+  const { size } = await stat(probeFrame);
+  if (size > 8_000) {
+    console.log(
+      "Skipped placeholder generation: real pet assets already present under public/assets/.",
+    );
+    process.exit(0);
+  }
+} catch {
+  // Missing frame file — generate placeholders below.
 }
 
 await mkdir(framesDir, { recursive: true });

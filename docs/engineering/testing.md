@@ -10,7 +10,7 @@
 | `npm run test:all` | 依次运行前端、shared、server Vitest 与 `cargo test` |
 | `npm run test:rust` | 仅运行 `src-tauri/` Rust 单元测试 |
 | `npm run build` | TypeScript build + Vite build |
-| `npm run assets:placeholder` | 生成 `public/assets/` 占位 PNG（CI 与全新 clone 后必跑） |
+| `npm run assets:placeholder` | 仅在 `public/assets/pet-frames/` 缺失时生成纯色占位 PNG |
 | `cargo test`（在 `src-tauri/`） | Rust 桌面端单元测试 |
 | `npm run tauri dev` | 开发态桌面应用冒烟 |
 | `npm run tauri build` | Tauri release 产物构建 |
