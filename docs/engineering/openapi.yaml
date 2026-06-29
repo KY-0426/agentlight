@@ -1,0 +1,424 @@
+openapi: 3.1.0
+info:
+  title: Agent Light Server API
+  version: 0.1.0
+  description: |
+    Agent Light 真实多用户服务端 API。所有写接口（设备注册、硬件绑定、用量上报）
+    必须携带 `Authorization: Bearer <access_token>`。排行榜全员榜可匿名访问，
+    团队榜必须携带 token 且属于该 workspace。
+  contact:
+    name: Agent Light
+servers:
+  - url: http://127.0.0.1:8787
+    description: 本地开发
+  - url: https://api.agent-light.example.com
+    description: 生产（占位，按部署替换）
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      required: [ok, error]
+      properties:
+        ok: { type: boolean, enum: [false] }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [bad_request, invalid_json, unauthorized, forbidden, not_found,
+                     conflict, invite_code_invalid, invite_code_used,
+                     verification_code_invalid, verification_code_expired,
+                     stale_usage_ignored, validation_failed, internal_error]
+            message: { type: string }
+            request_id: { type: string }
+    AuthSession:
+      type: object
+      required: [access_token, refresh_token, expires_in_seconds, user, workspaces]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        expires_in_seconds: { type: integer }
+        user: { $ref: '#/components/schemas/User' }
+        workspaces:
+          type: array
+          items:
+            type: object
+            properties:
+              workspace: { $ref: '#/components/schemas/Workspace' }
+              membership: { $ref: '#/components/schemas/Membership' }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        phone_number: { type: string, nullable: true }
+        display_name: { type: string }
+        created_at: { type: string, format: date-time }
+    Workspace:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+    Membership:
+      type: object
+      properties:
+        workspace_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        role: { type: string, enum: [owner, admin, member] }
+        joined_at: { type: string, format: date-time }
+    Device:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        installation_id: { type: string }
+        platform: { type: string, enum: [macos, windows] }
+        app_version: { type: string }
+        device_label: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    HardwareDevice:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        workspace_id: { type: string, format: uuid }
+        device_id: { type: string, format: uuid }
+        hardware_device_id: { type: string }
+        firmware_version: { type: string }
+        protocol_version: { type: string }
+        hardware_revision: { type: string }
+        bound_at: { type: string, format: date-time }
+    LeaderboardEntry:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        display_name: { type: string }
+        tokens_used: { type: integer }
+        rank: { type: integer }
+  responses:
+    BadRequest:
+      description: 请求体校验失败
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: 缺失或无效的 bearer token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: 无权访问目标 workspace
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      summary: 健康检查
+      security: []
+      responses:
+        '200':
+          description: 服务存活
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  service: { type: string }
+                  environment: { type: string }
+                  uptime_seconds: { type: integer }
+  /api/auth/phone/send-code:
+    post:
+      summary: 发送手机号验证码
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone_number]
+              properties:
+                phone_number: { type: string }
+      responses:
+        '200':
+          description: 验证码已发送（dev 模式返回 dev_code）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      phone_number: { type: string }
+                      expires_in_seconds: { type: integer }
+                      delivery: { type: string, enum: [dev] }
+                      dev_code: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/auth/phone/verify:
+    post:
+      summary: 手机号验证码登录（不存在则自动建号）
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone_number, verification_code]
+              properties:
+                phone_number: { type: string }
+                verification_code: { type: string, pattern: '^\d{6}$' }
+                display_name: { type: string }
+      responses:
+        '200': { description: 已有账号登录成功, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, data: { $ref: '#/components/schemas/AuthSession' } } } } } }
+        '201': { description: 新账号创建并登录, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, data: { $ref: '#/components/schemas/AuthSession' } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/auth/register:
+    post:
+      summary: 旧邮箱+邀请码注册（兼容）
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invite_code, email, password, display_name]
+              properties:
+                invite_code: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 12 }
+                display_name: { type: string }
+      responses:
+        '201': { description: 注册成功, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, data: { $ref: '#/components/schemas/AuthSession' } } } } } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /api/auth/login:
+    post:
+      summary: 邮箱登录
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200': { description: 登录成功, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, data: { $ref: '#/components/schemas/AuthSession' } } } } } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/auth/refresh:
+    post:
+      summary: 刷新 access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: 新的 token 对
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      access_token: { type: string }
+                      refresh_token: { type: string }
+                      expires_in_seconds: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/me:
+    get:
+      summary: 当前用户与 workspace
+      responses:
+        '200':
+          description: 当前用户信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+                      workspaces:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            workspace: { $ref: '#/components/schemas/Workspace' }
+                            membership: { $ref: '#/components/schemas/Membership' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/devices/register:
+    post:
+      summary: 注册/更新桌面设备
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [installation_id, platform, app_version]
+              properties:
+                workspace_id: { type: string, format: uuid }
+                installation_id: { type: string }
+                platform: { type: string, enum: [macos, windows] }
+                app_version: { type: string }
+                device_label: { type: string }
+      responses:
+        '200':
+          description: 设备已注册
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data: { $ref: '#/components/schemas/Device' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/hardware-devices/bind:
+    post:
+      summary: 绑定硬件设备
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [device_id, hardware_device_id, firmware_version, protocol_version, hardware_revision]
+              properties:
+                device_id: { type: string, format: uuid }
+                hardware_device_id: { type: string }
+                firmware_version: { type: string }
+                protocol_version: { type: string }
+                hardware_revision: { type: string }
+      responses:
+        '200':
+          description: 硬件已绑定
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data: { $ref: '#/components/schemas/HardwareDevice' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/usage/codex-thread:
+    post:
+      summary: 上报 Codex 线程 token 用量
+      description: |
+        同线程重复上报会去重，旧 tokens_used 不会覆盖较新累计值。
+        payload 严格校验，禁止 cwd/rollout_path/api_key/cookie/token/private_key 字段。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [workspace_id, device_id, codex_thread_id, tokens_used, thread_updated_at_ms, sampled_at_ms]
+              properties:
+                workspace_id: { type: string, format: uuid }
+                device_id: { type: string, format: uuid }
+                agent_provider: { type: string, enum: [codex, claude_code], default: codex }
+                codex_thread_id: { type: string }
+                model: { type: string }
+                tokens_used: { type: integer, minimum: 0 }
+                thread_updated_at_ms: { type: integer, minimum: 0 }
+                sampled_at_ms: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: 已记录（或旧值被忽略）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      codex_thread_id: { type: string }
+                      tokens_used: { type: integer }
+                      accepted_tokens_used: { type: integer }
+                      ignored_stale_value: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /api/leaderboards/tokens:
+    get:
+      summary: Token 排行榜
+      description: |
+        默认全员榜（可匿名）。带 workspace_id 时为团队榜（必须属于该 workspace）。
+        带 agent_provider 时按 Codex / Claude Code 分榜。
+      security: []
+      parameters:
+        - name: agent_provider
+          in: query
+          schema: { type: string, enum: [codex, claude_code], default: codex }
+        - name: workspace_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: 排行榜
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      scope: { type: string, enum: [global, workspace] }
+                      workspace_id: { type: string, format: uuid, nullable: true }
+                      agent_provider: { type: string }
+                      total_tokens: { type: integer }
+                      current_user_rank: { type: integer, nullable: true }
+                      entries:
+                        type: array
+                        items: { $ref: '#/components/schemas/LeaderboardEntry' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
