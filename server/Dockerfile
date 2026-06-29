@@ -12,8 +12,6 @@ FROM node:20-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/server/node_modules ./server/node_modules
-COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY package.json package-lock.json ./
 COPY tsconfig.json tsconfig.node.json ./
 COPY server/ ./server/
