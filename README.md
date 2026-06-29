@@ -91,6 +91,14 @@ npm run tauri:build:macos
 
 macOS DMG cannot be built on Windows. Use a Mac, or push a `v*` tag to trigger the GitHub Actions `Release` workflow.
 
+**macOS 首次打开（未 Apple 公证）**：若提示「无法验证开发者」或「已损坏」，在终端执行：
+
+```bash
+xattr -cr "/Applications/Agent Light.app"
+```
+
+然后 **Control + 点击** 应用 → **打开**（首次不要用双击）。也可运行仓库内 `bash scripts/macos-trust-agent-light.sh`。
+
 For browser-only frontend preview, use `npm run dev`. Browser preview does not validate the Tauri WebView, window permissions, or the Rust local API.
 
 ## License

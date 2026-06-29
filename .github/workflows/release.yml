@@ -46,8 +46,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build macOS DMG
+      - name: Build macOS app bundle
         run: npm run tauri:build:macos
+
+      - name: Ad-hoc sign and create DMG
+        run: bash scripts/macos-sign-and-dmg.sh
 
       - name: Upload macOS DMG
         uses: actions/upload-artifact@v4

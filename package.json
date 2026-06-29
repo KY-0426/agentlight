@@ -1,6 +1,6 @@
 {
   "name": "agent-light",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "license": "AGPL-3.0-or-later",
   "private": true,
   "type": "module",
@@ -33,7 +33,7 @@
     "run:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/run-agent-light.ps1",
     "tauri:build": "tauri build",
     "tauri:build:windows": "tauri build --bundles nsis",
-    "tauri:build:macos": "tauri build --bundles dmg",
+    "tauri:build:macos": "tauri build --bundles app",
     "agent-light": "node ./bin/agent-light.mjs"
   },
   "dependencies": {
