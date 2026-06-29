@@ -1257,6 +1257,76 @@
   border: 1px solid var(--sp-border-strong);
 }
 
+.settings-body--account {
+  gap: 18px;
+}
+
+.account-session-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.account-session-grid__row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.account-session-grid__actions {
+  display: flex;
+  justify-content: flex-start;
+  padding-top: 2px;
+}
+
+.account-card {
+  min-height: 72px;
+  padding: 14px;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  border: 1px solid var(--sp-border);
+  border-radius: 12px;
+  background: var(--sp-surface-raised);
+}
+
+.account-card span {
+  color: var(--sp-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.account-card strong {
+  font-family: var(--sp-font-mono);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.account-card small {
+  color: var(--sp-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.account-card--server {
+  min-height: 0;
+}
+
+.account-card__url {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 12px;
+}
+
+.phone-bind-panel {
+  margin-top: 2px;
+}
+
+.phone-bind-panel .leaderboard-form {
+  margin-top: 14px;
+  gap: 12px;
+}
+
 .leaderboard-session {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
@@ -1584,10 +1654,6 @@
   font-size: 12px;
   line-height: 1.4;
   overflow-x: auto;
-}
-
-.phone-bind-panel .leaderboard-form {
-  margin-top: 12px;
 }
 
 /* ── Hardware ── */
@@ -2005,6 +2071,7 @@
   .settings-split,
   .settings-light-layout,
   .leaderboard-form,
+  .account-session-grid__row,
   .leaderboard-session,
   .leaderboard-summary,
   .leaderboard-hero,

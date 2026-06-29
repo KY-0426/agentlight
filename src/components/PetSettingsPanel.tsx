@@ -582,74 +582,78 @@ function AccountPanel({
           <h2 id="account-session-heading">{deviceAccount ? "我的账户" : "已登录"}</h2>
           <span className="settings-badge">{deviceAccount ? "本机" : "已绑定手机"}</span>
         </div>
-        <div className="leaderboard-session">
-          <article>
-            <span>昵称</span>
-            {editingName ? (
-              <form
-                className="account-name-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  void saveDisplayName();
-                }}
-              >
-                <input
-                  type="text"
-                  value={draftName}
-                  onChange={(event) => setDraftName(event.target.value)}
-                  autoComplete="nickname"
-                  maxLength={120}
-                  disabled={savingName}
-                  autoFocus
-                />
-                <div className="account-name-form__actions">
-                  <button type="submit" disabled={savingName}>
-                    {savingName ? "保存中" : "保存"}
+        <div className="account-session-grid">
+          <div className="account-session-grid__row">
+            <article className="account-card">
+              <span>昵称</span>
+              {editingName ? (
+                <form
+                  className="account-name-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void saveDisplayName();
+                  }}
+                >
+                  <input
+                    type="text"
+                    value={draftName}
+                    onChange={(event) => setDraftName(event.target.value)}
+                    autoComplete="nickname"
+                    maxLength={120}
+                    disabled={savingName}
+                    autoFocus
+                  />
+                  <div className="account-name-form__actions">
+                    <button type="submit" disabled={savingName}>
+                      {savingName ? "保存中" : "保存"}
+                    </button>
+                    <button type="button" disabled={savingName} onClick={() => setEditingName(false)}>
+                      取消
+                    </button>
+                  </div>
+                  {nameError ? <p className="leaderboard-error">{nameError}</p> : null}
+                </form>
+              ) : (
+                <>
+                  <strong>{formatFriendlyDisplayName(cloudSession.display_name)}</strong>
+                  <button className="overview-card__link overview-card__link--inline" type="button" onClick={() => setEditingName(true)}>
+                    修改昵称
                   </button>
-                  <button type="button" disabled={savingName} onClick={() => setEditingName(false)}>
-                    取消
-                  </button>
-                </div>
-                {nameError ? <p className="leaderboard-error">{nameError}</p> : null}
-              </form>
-            ) : (
-              <>
-                <strong>{formatFriendlyDisplayName(cloudSession.display_name)}</strong>
-                <button className="overview-card__link overview-card__link--inline" type="button" onClick={() => setEditingName(true)}>
-                  修改昵称
-                </button>
-              </>
-            )}
-            <small>
-              {cloudSession.user_phone_number ??
-                (deviceAccount ? "本机自动注册，无需登录" : cloudSession.user_email)}
-            </small>
-          </article>
-          <article>
-            <span>云端同步</span>
-            <strong>{cloudSyncStatus.state === "error" ? "异常" : "已开启"}</strong>
-            <small>{formatSyncDetail(cloudSession, cloudSyncStatus)}</small>
-          </article>
-          <article>
+                </>
+              )}
+              <small>
+                {cloudSession.user_phone_number ??
+                  (deviceAccount ? "本机自动注册，无需登录" : cloudSession.user_email)}
+              </small>
+            </article>
+            <article className="account-card">
+              <span>云端同步</span>
+              <strong>{cloudSyncStatus.state === "error" ? "异常" : "已开启"}</strong>
+              <small>{formatSyncDetail(cloudSession, cloudSyncStatus)}</small>
+            </article>
+          </div>
+          <article className="account-card account-card--server">
             <span>服务端</span>
-            <strong>{formatServerUrl(cloudSession.server_url)}</strong>
+            <strong className="account-card__url">{formatServerUrl(cloudSession.server_url)}</strong>
             <small>更换地址请先断开云端同步，再重新连接</small>
           </article>
           {IS_DEV_BUILD ? (
-            <article>
+            <article className="account-card">
               <span>工作空间</span>
               <strong>{formatWorkspaceId(cloudSession.workspace_id)}</strong>
               <small>仅开发模式可见</small>
             </article>
           ) : null}
-          <button
-            className="leaderboard-refresh"
-            type="button"
-            onClick={() => logoutClick.onClick()}
-            disabled={logoutClick.busy}
-          >
-            {deviceAccount ? "断开云端同步" : "退出登录"}
-          </button>
+          <div className="account-session-grid__actions">
+            <button
+              className="leaderboard-refresh"
+              type="button"
+              onClick={() => logoutClick.onClick()}
+              disabled={logoutClick.busy}
+            >
+              {deviceAccount ? "断开云端同步" : "退出登录"}
+            </button>
+          </div>
         </div>
       </section>
 
