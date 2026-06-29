@@ -114,7 +114,7 @@ export const AgentPet = memo(function AgentPet({
           } as CSSProperties
         }
         type="button"
-        aria-label={state === "completed" ? "确认已完成并回到待命" : "打开桌宠设置"}
+        aria-label={state === "completed" ? "确认已完成并回到待命" : "打开桌宠控制台"}
         onPointerDown={(event) => {
           dragStartRef.current = {
             pointerX: event.clientX,

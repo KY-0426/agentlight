@@ -12,10 +12,11 @@ Agent Light 多用户软件 MVP 的 Fastify 服务端。
 - `POST /api/auth/login`
 - `POST /api/auth/refresh`
 - `GET /api/me`
-- `POST /api/devices/register`
+- `POST /api/devices/bootstrap`，安装时自动创建设备账户（无需登录），重复调用幂等返回同一用户
+- `POST /api/devices/register`（需登录，用于手机号账户绑定设备）
 - `POST /api/hardware-devices/bind`
 - `POST /api/usage/codex-thread`
-- `GET /api/leaderboards/tokens`，不带 `workspace_id` 返回全员榜，带 `workspace_id` 返回需鉴权的团队榜，`agent_provider` 区分 Codex / Claude Code
+- `GET /api/leaderboards/tokens`，不带 `workspace_id` 返回全员榜，带 `workspace_id` 返回需鉴权的团队榜，`agent_provider` 区分 Codex / Cursor / Claude Code
 - Zod 环境变量校验
 - Fastify 结构化错误响应
 - Pino 日志脱敏配置
@@ -28,16 +29,31 @@ Agent Light 多用户软件 MVP 的 Fastify 服务端。
 
 ```bash
 cp server/.env.example server/.env
+npm run db:setup
+npm run db:migrate
 npm run server:dev
 ```
 
-本地 PostgreSQL：
+本地 PostgreSQL（二选一）：
 
 ```bash
+# Docker
 docker compose up -d postgres
+
+# 或本机已安装 PostgreSQL 17 时，用超级用户创建 agent_light 库/账号
+npm run db:setup
+npm run db:migrate
+```
+
+若本机 `postgres` 超级用户密码不是默认值，先设置：
+
+```bash
+set POSTGRES_ADMIN_PASSWORD=你的密码   # Windows CMD
+$env:POSTGRES_ADMIN_PASSWORD='你的密码' # PowerShell
+npm run db:setup
 ```
 
 ## 边界
 
 - 本地单元测试使用内存仓储；真实 PostgreSQL migration 执行和数据库集成测试仍需单独跑。
-- 桌面端已接入登录、排行榜 UI、设备注册和在线 token 上报；离线同步队列、refresh token 自动续期和硬件 HELLO 握手还未接入。
+- 桌面端启动时自动调用 bootstrap，无需登录即可上报 token 并上榜；手机号绑定与多设备合并即将推出

@@ -25,6 +25,7 @@
     "server:dev": "npm --workspace @agent-light/server run dev",
     "server:test": "npm --workspace @agent-light/server run test",
     "db:migrate": "npm --workspace @agent-light/server run db:migrate",
+    "db:setup": "node ./scripts/setup-local-postgres.mjs",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:dev:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/win-dev.ps1",

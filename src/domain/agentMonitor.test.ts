@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AiToolTokenUsage } from "./aiTools";
-import { pickActiveAiToolLabel, pickPrimaryAgentMonitor } from "./agentMonitor";
+import { pickActiveAiToolLabel, pickActiveAiToolName, pickPrimaryAgentMonitor } from "./agentMonitor";
 
 function snapshot(state: "standby" | "working" | "completed" | "attention", available = true) {
   return { available, state };
@@ -77,5 +77,21 @@ describe("pickActiveAiToolLabel", () => {
 
   it("falls back when nothing is available", () => {
     expect(pickActiveAiToolLabel([])).toBe("暂无可用工具");
+    expect(pickActiveAiToolName([])).toBe("未连接");
+  });
+
+  it("returns active tool name without state suffix", () => {
+    expect(
+      pickActiveAiToolName([
+        {
+          ...baseTool,
+          id: "cursor",
+          name: "Cursor",
+          available: true,
+          state: "working",
+          state_label: "工作中",
+        },
+      ]),
+    ).toBe("Cursor");
   });
 });

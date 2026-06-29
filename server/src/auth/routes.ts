@@ -8,6 +8,8 @@ import {
   registerRequestSchema,
   sendPhoneVerificationCodeRequestSchema,
   sendPhoneVerificationCodeResponseSchema,
+  updateProfileRequestSchema,
+  updateProfileResponseSchema,
   verifyPhoneLoginRequestSchema,
 } from "@agent-light/shared";
 import { createOpaqueToken, hashOpaqueValue, hashPassword, verifyPassword } from "./crypto";
@@ -184,6 +186,32 @@ export async function registerAuthRoutes(app: FastifyInstance, options: AuthRout
     });
 
     return reply.send({ ok: true, data: response });
+  });
+
+  app.patch("/api/me", async (request, reply) => {
+    const user = await authenticate(request, reply, env, repository);
+    if (!user) {
+      return reply;
+    }
+
+    const parsed = updateProfileRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return sendError(reply, 400, "validation_failed", "Invalid profile update payload");
+    }
+
+    try {
+      const updated = await repository.updateUserDisplayName(user.id, parsed.data.display_name);
+      const response = updateProfileResponseSchema.parse({
+        user: toUserDto(updated),
+      });
+      return reply.send({ ok: true, data: response });
+    } catch (error) {
+      if (error instanceof AuthRepositoryError) {
+        return sendError(reply, error.statusCode, error.code, error.message);
+      }
+
+      throw error;
+    }
   });
 }
 

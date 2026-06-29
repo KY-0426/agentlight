@@ -23,9 +23,11 @@ export function AiToolTokenOverview({
     <section className="settings-section ai-tool-token-panel" aria-labelledby="ai-tool-token-heading">
       <div className="settings-section__title">
         <div>
-          <h2 id="ai-tool-token-heading">AI 工具 Token</h2>
+          <h2 id="ai-tool-token-heading">AI 助手</h2>
           <p className="settings-section__hint">
-            共 {tools.length} 个工具 · 已读取 {trackedCount} 个 · 本机合计 {formatTokens(trackedTotal)}
+            {tools.length > 0
+              ? `已连接 ${trackedCount} 个 · 本机累计 ${formatTokens(trackedTotal)}`
+              : "连接 AI 编程助手后，桌宠会跟随工作状态变化"}
           </p>
         </div>
         <div className="settings-section__actions">
@@ -47,7 +49,7 @@ export function AiToolTokenOverview({
         <div className="ai-tool-token-table__head" role="row">
           <span role="columnheader">工具</span>
           <span role="columnheader">状态</span>
-          <span role="columnheader">Token</span>
+          <span role="columnheader">用量</span>
           <span role="columnheader">说明</span>
         </div>
         {tools.map((tool) => (
@@ -98,10 +100,10 @@ function formatInstallState(tool: AiToolTokenUsage): string {
 
 function formatTokenKind(kind: AiToolTokenUsage["token_kind"]): string {
   if (kind === "official") {
-    return "本地官方字段";
+    return "官方统计";
   }
   if (kind === "estimated") {
-    return "本地估算";
+    return "估算值";
   }
   if (kind === "pending") {
     return "即将支持";

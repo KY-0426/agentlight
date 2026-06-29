@@ -6,9 +6,21 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+
+const INSTALL_DETECT_CACHE_TTL_MS: u128 = 60_000;
+const TOKEN_USAGE_LIST_CACHE_TTL_MS: u128 = 5_000;
+const EXTENSION_DETECT_CACHE_TTL_MS: u128 = 300_000;
+
+static INSTALL_DETECT_CACHE: LazyLock<Mutex<HashMap<String, (bool, u128)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+static TOKEN_USAGE_LIST_CACHE: LazyLock<Mutex<Option<(u128, Vec<AiToolTokenUsage>)>>> =
+    LazyLock::new(|| Mutex::new(None));
+static EXTENSION_DIR_CACHE: LazyLock<Mutex<Option<(bool, u128)>>> = LazyLock::new(|| Mutex::new(None));
 
 const CURSOR_HOOK_SCRIPT: &str = r#"const http = require("http");
 
@@ -63,7 +75,16 @@ function resolveHookName(input) {
   }
 }
 
-function resolveAgentState(hookName) {
+function resolveToolName(input) {
+  try {
+    const payload = JSON.parse(input || "{}");
+    return payload.tool_name || payload.toolName || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveAgentState(hookName, input) {
   if (hookName === "stop") {
     return { state: "completed", message: "Cursor 任务完成" };
   }
@@ -76,13 +97,28 @@ function resolveAgentState(hookName) {
   if (hookName === "sessionStart") {
     return { state: "standby", message: "Cursor 会话就绪" };
   }
+  if (hookName === "preToolUse") {
+    const toolName = resolveToolName(input);
+    if (toolName === "Shell") {
+      return { state: "attention", message: "等待终端命令批准" };
+    }
+    return { state: "working", message: "Cursor 正在工作" };
+  }
+  if (
+    hookName === "beforeShellExecution" ||
+    hookName === "afterShellExecution" ||
+    hookName === "postToolUse" ||
+    hookName === "beforeSubmitPrompt"
+  ) {
+    return { state: "working", message: "Cursor 正在工作" };
+  }
   return { state: "working", message: "Cursor 工作中" };
 }
 
 async function main() {
   const input = await readStdin();
   const hookName = resolveHookName(input);
-  const { state, message } = resolveAgentState(hookName);
+  const { state, message } = resolveAgentState(hookName, input);
   await postState(state, message);
 }
 
@@ -98,6 +134,8 @@ const CURSOR_HOOK_EVENTS: &[&str] = &[
     "beforeSubmitPrompt",
     "preToolUse",
     "postToolUse",
+    "beforeShellExecution",
+    "afterShellExecution",
     "stop",
     "sessionEnd",
     "postToolUseFailure",
@@ -153,8 +191,23 @@ const TOOL_DEFINITIONS: &[ToolDefinition] = &[
         installable: false,
     },
     ToolDefinition {
+        id: "trae",
+        name: "Trae",
+        installable: false,
+    },
+    ToolDefinition {
+        id: "trae_cn",
+        name: "Trae CN",
+        installable: false,
+    },
+    ToolDefinition {
         id: "qoder",
         name: "Qoder",
+        installable: false,
+    },
+    ToolDefinition {
+        id: "qoder_cn",
+        name: "Qoder CN",
         installable: false,
     },
     ToolDefinition {
@@ -165,6 +218,16 @@ const TOOL_DEFINITIONS: &[ToolDefinition] = &[
     ToolDefinition {
         id: "antigravity",
         name: "Antigravity",
+        installable: false,
+    },
+    ToolDefinition {
+        id: "kiro",
+        name: "Kiro",
+        installable: false,
+    },
+    ToolDefinition {
+        id: "devin",
+        name: "Devin",
         installable: false,
     },
 ];
@@ -194,36 +257,60 @@ pub struct AiToolTokenUsage {
 }
 
 pub fn list_ai_tool_token_usages() -> Result<Vec<AiToolTokenUsage>, CommandError> {
-    Ok(TOOL_DEFINITIONS
+    let now = crate::timestamp_ms();
+    if let Ok(cache) = TOKEN_USAGE_LIST_CACHE.lock() {
+        if let Some((cached_at, usages)) = cache.as_ref() {
+            if now.saturating_sub(*cached_at) <= TOKEN_USAGE_LIST_CACHE_TTL_MS {
+                return Ok(usages.clone());
+            }
+        }
+    }
+
+    let codex_snapshot = read_codex_status();
+    let cursor_snapshot = crate::cursor::read_cursor_status();
+    let claude_snapshot = crate::claude_code::read_claude_code_status();
+    let usages: Vec<AiToolTokenUsage> = TOOL_DEFINITIONS
         .iter()
-        .map(|tool| build_tool_token_usage(tool))
-        .collect())
+        .map(|tool| build_tool_token_usage_with_snapshots(
+            tool,
+            &codex_snapshot,
+            &cursor_snapshot,
+            &claude_snapshot,
+        ))
+        .collect();
+
+    if let Ok(mut cache) = TOKEN_USAGE_LIST_CACHE.lock() {
+        *cache = Some((now, usages.clone()));
+    }
+
+    Ok(usages)
 }
 
-fn build_tool_token_usage(tool: &ToolDefinition) -> AiToolTokenUsage {
+fn build_tool_token_usage_with_snapshots(
+    tool: &ToolDefinition,
+    codex_snapshot: &CodexStatusSnapshot,
+    cursor_snapshot: &CodexStatusSnapshot,
+    claude_snapshot: &CodexStatusSnapshot,
+) -> AiToolTokenUsage {
     let base = build_tool_status(tool);
     match tool.id {
-        "codex" => usage_from_snapshot(&base, read_codex_status(), "official"),
-        "cursor" => usage_from_snapshot(&base, crate::cursor::read_cursor_status(), "estimated"),
-        "claude_code" => usage_from_snapshot(
-            &base,
-            crate::claude_code::read_claude_code_status(),
-            "estimated",
-        ),
+        "codex" => usage_from_snapshot(&base, codex_snapshot.clone(), "official"),
+        "cursor" => usage_from_snapshot(&base, cursor_snapshot.clone(), "estimated"),
+        "claude_code" => usage_from_snapshot(&base, claude_snapshot.clone(), "estimated"),
         _ => AiToolTokenUsage {
             id: base.id,
             name: base.name,
             installed: base.installed,
             configured: base.configured,
             installable: base.installable,
-            available: base.installed,
+            available: false,
             state: if base.installed {
                 "standby".to_string()
             } else {
                 "attention".to_string()
             },
             state_label: if base.installed {
-                "已安装".to_string()
+                "仅检测安装".to_string()
             } else {
                 "未安装".to_string()
             },
@@ -360,12 +447,137 @@ fn describe_tool_status(tool_id: &str, installed: bool, configured: bool) -> Str
 }
 
 fn detect_tool_installed(tool_id: &str) -> bool {
+    let now = crate::timestamp_ms();
+    if let Ok(cache) = INSTALL_DETECT_CACHE.lock() {
+        if let Some((installed, cached_at)) = cache.get(tool_id) {
+            if now.saturating_sub(*cached_at) <= INSTALL_DETECT_CACHE_TTL_MS {
+                return *installed;
+            }
+        }
+    }
+
+    let installed = detect_tool_installed_uncached(tool_id);
+    if let Ok(mut cache) = INSTALL_DETECT_CACHE.lock() {
+        cache.insert(tool_id.to_string(), (installed, now));
+    }
+    installed
+}
+
+fn detect_tool_installed_uncached(tool_id: &str) -> bool {
     match tool_id {
-        "codex" => find_codex_binary().is_some() || codex_state_db_path().is_some_and(|path| path.is_file()),
-        "cursor" => cursor_home_dir().is_some_and(|home| home.join("projects").is_dir())
-            || cursor_executable().is_some(),
-        "claude_code" => find_claude_binary().is_some() || user_home().is_some_and(|home| home.join(".claude").is_dir()),
-        "github_copilot" => false,
+        "codex" => {
+            find_codex_binary().is_some()
+                || codex_state_db_path().is_some_and(|path| path.is_file())
+                || detect_by_locations(
+                    &["codex"],
+                    &[".codex"],
+                    &["Codex"],
+                    &["Codex", "Programs/Codex"],
+                    &[],
+                    &[],
+                )
+        }
+        "cursor" => {
+            cursor_home_dir().is_some_and(|home| home.join("projects").is_dir())
+                || cursor_executable().is_some()
+                || detect_by_locations(
+                    &["cursor"],
+                    &[".cursor"],
+                    &["Cursor"],
+                    &["Cursor", "Programs/cursor"],
+                    &["Cursor"],
+                    &[],
+                )
+        }
+        "claude_code" => {
+            find_claude_binary().is_some()
+                || detect_by_locations(
+                    &["claude", "claude-code"],
+                    &[".claude"],
+                    &["Claude", "Claude Code"],
+                    &[
+                        "Claude",
+                        "Claude Code",
+                        "Programs/Claude",
+                        "Programs/Claude Code",
+                    ],
+                    &["Claude", "Claude Code"],
+                    &[],
+                )
+        }
+        "github_copilot" => {
+            find_in_path("copilot").is_some()
+                || find_in_path("github-copilot-cli").is_some()
+                || find_in_path("gh-copilot").is_some()
+                || user_home().is_some_and(|home| {
+                    home.join(".github-copilot").is_dir()
+                        || home.join(".config").join("github-copilot").is_dir()
+                })
+        }
+        "trae" => detect_by_locations(
+            &["trae"],
+            &[".trae"],
+            &["Trae"],
+            &["Trae", "Programs/Trae"],
+            &["Trae"],
+            &[],
+        ),
+        "trae_cn" => detect_by_locations(
+            &["trae-cn", "trae_cn"],
+            &[".trae-cn"],
+            &["Trae CN"],
+            &["Trae CN", "Programs/Trae CN"],
+            &["Trae CN"],
+            &[],
+        ),
+        "qoder" => detect_by_locations(
+            &["qoder"],
+            &[".qoder"],
+            &["Qoder"],
+            &["Qoder", "Programs/Qoder"],
+            &["Qoder"],
+            &[],
+        ),
+        "qoder_cn" => detect_by_locations(
+            &["qoder-cn", "qoder_cn"],
+            &[".qoder-cn"],
+            &["Qoder CN"],
+            &["Qoder CN", "Programs/Qoder CN"],
+            &["Qoder CN"],
+            &[],
+        ),
+        "codebuddy" => detect_by_locations(
+            &["codebuddy", "code-buddy"],
+            &[".codebuddy", ".code-buddy"],
+            &["CodeBuddy", "Code Buddy", "Tencent/CodeBuddy"],
+            &["CodeBuddy", "Code Buddy", "Programs/CodeBuddy"],
+            &["CodeBuddy", "Code Buddy"],
+            &[],
+        ),
+        "antigravity" => detect_by_locations(
+            &["antigravity"],
+            &[".antigravity"],
+            &["Antigravity"],
+            &["Antigravity", "Programs/Antigravity"],
+            &["Antigravity"],
+            &[],
+        ),
+        "kiro" => detect_by_locations(
+            &["kiro"],
+            &[".kiro"],
+            &["Kiro"],
+            &["Kiro", "Programs/Kiro"],
+            &["Kiro"],
+            &[],
+        ),
+        "devin" => detect_by_locations(
+            &["devin"],
+            &[".devin"],
+            &["Devin"],
+            &["devin", "Devin", "Programs/Devin"],
+            &["Devin"],
+            &[],
+        ),
         _ => false,
     }
 }
@@ -649,6 +861,86 @@ fn find_node_binary() -> Option<PathBuf> {
     find_in_path("node")
 }
 
+fn detect_by_locations(
+    cli_names: &[&str],
+    home_dirs: &[&str],
+    app_data_dirs: &[&str],
+    local_app_data_dirs: &[&str],
+    program_files_dirs: &[&str],
+    extension_prefixes: &[&str],
+) -> bool {
+    cli_names
+        .iter()
+        .any(|program| find_in_path(program).is_some())
+        || user_home().is_some_and(|home| {
+            any_relative_dir(&home, home_dirs) || extension_dir_contains(&home, extension_prefixes)
+        })
+        || any_env_relative_dir("APPDATA", app_data_dirs)
+        || any_env_relative_dir("LOCALAPPDATA", local_app_data_dirs)
+        || any_program_files_relative_dir(program_files_dirs)
+}
+
+fn any_env_relative_dir(env_name: &str, relative_dirs: &[&str]) -> bool {
+    std::env::var_os(env_name)
+        .map(PathBuf::from)
+        .is_some_and(|base| any_relative_dir(&base, relative_dirs))
+}
+
+fn any_program_files_relative_dir(relative_dirs: &[&str]) -> bool {
+    ["ProgramFiles", "ProgramFiles(x86)"]
+        .iter()
+        .any(|env_name| any_env_relative_dir(env_name, relative_dirs))
+}
+
+fn any_relative_dir(base: &Path, relative_dirs: &[&str]) -> bool {
+    relative_dirs
+        .iter()
+        .map(|relative| join_relative_path(base, relative))
+        .any(|path| path.is_dir())
+}
+
+fn join_relative_path(base: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(base.to_path_buf(), |path, part| path.join(part))
+}
+
+fn extension_dir_contains(home: &Path, extension_prefixes: &[&str]) -> bool {
+    if extension_prefixes.is_empty() {
+        return false;
+    }
+
+    let now = crate::timestamp_ms();
+    if let Ok(cache) = EXTENSION_DIR_CACHE.lock() {
+        if let Some((matched, cached_at)) = cache.as_ref() {
+            if now.saturating_sub(*cached_at) <= EXTENSION_DETECT_CACHE_TTL_MS {
+                return *matched;
+            }
+        }
+    }
+
+    let matched = [".vscode/extensions", ".cursor/extensions"]
+        .iter()
+        .map(|relative| join_relative_path(home, relative))
+        .any(|dir| {
+            std::fs::read_dir(dir).ok().is_some_and(|entries| {
+                entries.filter_map(Result::ok).any(|entry| {
+                    let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
+                    extension_prefixes
+                        .iter()
+                        .any(|prefix| name.starts_with(&prefix.to_ascii_lowercase()))
+                })
+            })
+        });
+
+    if let Ok(mut cache) = EXTENSION_DIR_CACHE.lock() {
+        *cache = Some((matched, now));
+    }
+
+    matched
+}
+
 fn find_in_path(program: &str) -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     let checker = "where";
@@ -723,5 +1015,20 @@ mod tests {
         assert!(CURSOR_HOOK_SCRIPT.contains("require(\"http\")"));
         assert!(CURSOR_HOOK_SCRIPT.contains("completed"));
         assert!(!CURSOR_HOOK_SCRIPT.contains("cursor-hook.mjs"));
+    }
+
+    #[test]
+    fn joins_slash_separated_relative_paths() {
+        assert_eq!(
+            join_relative_path(Path::new("C:\\Users\\agent"), "Programs/Qoder"),
+            PathBuf::from("C:\\Users\\agent")
+                .join("Programs")
+                .join("Qoder")
+        );
+    }
+
+    #[test]
+    fn empty_detection_rules_do_not_match() {
+        assert!(!detect_by_locations(&[], &[], &[], &[], &[], &[]));
     }
 }

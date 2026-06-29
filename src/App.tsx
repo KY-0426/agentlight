@@ -3,7 +3,6 @@ import { AgentPet } from "./components/AgentPet";
 import { HardwareDebugPanel } from "./components/HardwareDebugPanel";
 import { PetSettingsPanel } from "./components/PetSettingsPanel";
 import { useGuardedClick } from "./hooks/useGuardedClick";
-import { pickPrimaryAgentMonitor } from "./domain/agentMonitor";
 import type { AiToolTokenUsage } from "./domain/aiTools";
 import {
   type AgentState,
@@ -29,19 +28,20 @@ import {
   listenForStatus,
   listenForHardwareStatus,
   loadCloudSession,
+  ensureCloudSession,
+  connectCloudDevice,
   loginOrRegisterCloud,
   hideSettingsWindow,
   exitApp,
   openSettingsWindow,
   clearCloudSession,
   sendPhoneVerificationCodeCloud,
+  updateCloudDisplayName,
   setAgentState,
   setAlwaysOnTop,
   setHardwareLightSettings,
   snapMainWindowToTop,
   startWindowDrag,
-  syncCodexAgentState,
-  syncCursorAgentState,
   uploadCodexThreadUsage,
   type CloudPhoneLoginRequest,
   type CloudPhoneCodeRequest,
@@ -51,20 +51,23 @@ import {
   type HardwareStatusSnapshot,
   type SystemMetrics,
   type AgentProvider,
+  type LeaderboardTimePeriod,
   type TokenLeaderboardResponse,
   type WindowPlacement,
 } from "./tauriClient";
 
 const STORAGE_KEY = "agent-light-config-v1";
 const FIXED_MOTION_SPEED = 760;
-const MANUAL_STATUS_HOLD_MS = 60_000;
-const AGENT_STATUS_REFRESH_MS = 2_000;
-const SYSTEM_METRICS_REFRESH_MS = 10_000;
+const AGENT_STATUS_REFRESH_MS = 15_000;
+const SYSTEM_METRICS_REFRESH_MS = 30_000;
+const MAIN_PLACEMENT_REFRESH_MS = 10_000;
+const HARDWARE_REFRESH_MS = 30_000;
 
 interface StoredConfig {
   alwaysOnTop: boolean;
   launchAtLogin: boolean;
   lightSettings: LightSettings;
+  cloudSyncEnabled: boolean;
 }
 
 type LeaderboardStatus = "idle" | "loading" | "ready" | "error";
@@ -79,6 +82,7 @@ const defaultConfig: StoredConfig = {
   alwaysOnTop: true,
   launchAtLogin: false,
   lightSettings: defaultLightSettings,
+  cloudSyncEnabled: true,
 };
 
 function loadConfig(): StoredConfig {
@@ -93,17 +97,18 @@ function loadConfig(): StoredConfig {
       alwaysOnTop: parsed.alwaysOnTop ?? defaultConfig.alwaysOnTop,
       launchAtLogin: parsed.launchAtLogin ?? defaultConfig.launchAtLogin,
       lightSettings: normalizeLightSettings(parsed.lightSettings),
+      cloudSyncEnabled: parsed.cloudSyncEnabled ?? defaultConfig.cloudSyncEnabled,
     };
   } catch {
     return defaultConfig;
   }
 }
 
-function isManualStatusHold(event: AgentStatusEvent) {
-  if (event.source !== "ui" && event.source !== "local_api") {
-    return false;
+function cloudSessionMessage(session: CloudSession): string {
+  if (session.user_phone_number) {
+    return "已绑定手机，用量会自动同步";
   }
-  return Date.now() - event.timestamp_ms < MANUAL_STATUS_HOLD_MS;
+  return "云端同步已开启";
 }
 
 export default function App() {
@@ -121,11 +126,12 @@ export default function App() {
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatusSnapshot | null>(null);
   const [cloudSession, setCloudSession] = useState<CloudSession | null>(null);
   const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>({
-    state: "signed_out",
-    message: "登录后自动上报 token 消耗",
+    state: "syncing",
+    message: "正在连接云端…",
   });
   const [leaderboard, setLeaderboard] = useState<TokenLeaderboardResponse | null>(null);
   const [leaderboardAgentProvider, setLeaderboardAgentProvider] = useState<AgentProvider>("codex");
+  const [leaderboardTimePeriod, setLeaderboardTimePeriod] = useState<LeaderboardTimePeriod>("total");
   const [leaderboardStatus, setLeaderboardStatus] = useState<LeaderboardStatus>("idle");
   const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
   const [placement, setPlacement] = useState<WindowPlacement>({
@@ -135,7 +141,9 @@ export default function App() {
   });
   const eventRef = useRef(event);
   const cloudSessionRef = useRef<CloudSession | null>(null);
+  const cloudSyncEnabledRef = useRef(config.cloudSyncEnabled);
   const leaderboardAgentProviderRef = useRef<AgentProvider>("codex");
+  const leaderboardTimePeriodRef = useRef<LeaderboardTimePeriod>("total");
   const lastUsageUploadKeyRef = useRef<Partial<Record<AgentProvider, string>>>({});
   const windowLabelRef = useRef<string | null>(null);
 
@@ -158,6 +166,10 @@ export default function App() {
   }, [config]);
 
   useEffect(() => {
+    cloudSyncEnabledRef.current = config.cloudSyncEnabled;
+  }, [config.cloudSyncEnabled]);
+
+  useEffect(() => {
     void syncHardwareLightSettings(config.lightSettings);
   }, [config.lightSettings]);
 
@@ -168,6 +180,10 @@ export default function App() {
   useEffect(() => {
     leaderboardAgentProviderRef.current = leaderboardAgentProvider;
   }, [leaderboardAgentProvider]);
+
+  useEffect(() => {
+    leaderboardTimePeriodRef.current = leaderboardTimePeriod;
+  }, [leaderboardTimePeriod]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,7 +223,7 @@ export default function App() {
       void refreshHardwareStatus();
       hardwareTimer = window.setInterval(() => {
         void refreshHardwareStatus();
-      }, 10_000);
+      }, HARDWARE_REFRESH_MS);
       void refreshCloudSession();
       void refreshTokenLeaderboard();
       leaderboardTimer = window.setInterval(() => {
@@ -229,19 +245,12 @@ export default function App() {
       }
 
       getStatus()
-        .then((snapshot) => pushEvent(snapshot, label))
-        .catch(() => pushEvent(createStatusEvent("standby", "预览模式", "fallback"), label));
+        .then((snapshot) => pushEvent(snapshot))
+        .catch(() => pushEvent(createStatusEvent("standby", "预览模式", "fallback")));
 
       let unlisten: (() => void) | null = null;
       listenForStatus((snapshot) => {
-        pushEvent(snapshot, label);
-        if (
-          snapshot.source === "local_api" ||
-          snapshot.source === "codex_monitor" ||
-          snapshot.source === "cursor_monitor"
-        ) {
-          void refreshAiToolTokensOnly();
-        }
+        pushEvent(snapshot);
       })
         .then((unsubscribe) => {
           unlisten = unsubscribe;
@@ -267,11 +276,7 @@ export default function App() {
         void refreshPlacement();
         placementTimer = window.setInterval(() => {
           void refreshPlacement();
-        }, 2_000);
-        void refreshAgentStatuses();
-        agentStatusTimer = window.setInterval(() => {
-          void refreshAgentStatuses();
-        }, AGENT_STATUS_REFRESH_MS);
+        }, MAIN_PLACEMENT_REFRESH_MS);
       } else {
         startSettingsTimers();
         const onVisibilityChange = () => {
@@ -314,13 +319,10 @@ export default function App() {
     };
   }, []);
 
-  function pushEvent(snapshot: AgentStatusEvent, windowLabel: string | null = windowLabelRef.current) {
+  function pushEvent(snapshot: AgentStatusEvent) {
     eventRef.current = snapshot;
     setEvent(snapshot);
     setLogs((currentLogs) => [snapshot, ...currentLogs].slice(0, 5));
-    if (windowLabel !== "settings") {
-      window.setTimeout(() => void refreshHardwareStatus(), 120);
-    }
   }
 
   async function triggerState(state: AgentState, message = `${statusDefinitions[state].label}测试`) {
@@ -409,32 +411,30 @@ export default function App() {
     }
   }
 
-  async function refreshAiToolTokensOnly() {
+  async function refreshAgentStatuses(options?: { showLoading?: boolean }) {
+    if (options?.showLoading) {
+      setAiToolLoading(true);
+    }
     try {
-      setAiToolTokens(await listAiToolTokenUsages());
-    } catch {
-      setAiToolTokens([]);
+      const [codexSnapshot, cursorSnapshot, aiToolsSnapshot] = await Promise.all([
+        getCodexStatus().catch(() => null),
+        getCursorStatus().catch(() => null),
+        listAiToolTokenUsages().catch(() => [] as AiToolTokenUsage[]),
+      ]);
+      setCodexStatus(codexSnapshot);
+      setCursorStatus(cursorSnapshot);
+      setAiToolTokens(aiToolsSnapshot);
+      if (codexSnapshot) {
+        void syncAgentUsage(codexSnapshot, "codex");
+      }
+      if (cursorSnapshot) {
+        void syncAgentUsage(cursorSnapshot, "cursor");
+      }
+    } finally {
+      if (options?.showLoading) {
+        setAiToolLoading(false);
+      }
     }
-  }
-
-  async function refreshAgentStatuses() {
-    setAiToolLoading(true);
-    const [codexSnapshot, cursorSnapshot, aiToolsSnapshot] = await Promise.all([
-      getCodexStatus().catch(() => null),
-      getCursorStatus().catch(() => null),
-      listAiToolTokenUsages().catch(() => [] as AiToolTokenUsage[]),
-    ]);
-    setCodexStatus(codexSnapshot);
-    setCursorStatus(cursorSnapshot);
-    setAiToolTokens(aiToolsSnapshot);
-    setAiToolLoading(false);
-    if (codexSnapshot) {
-      void syncAgentUsage(codexSnapshot, "codex");
-    }
-    if (cursorSnapshot) {
-      void syncAgentUsage(cursorSnapshot, "cursor");
-    }
-    void syncFromAgentStatuses(cursorSnapshot, codexSnapshot);
   }
 
   async function refreshHardwareStatus(options?: { probe?: boolean }) {
@@ -463,13 +463,20 @@ export default function App() {
 
   async function refreshCloudSession() {
     try {
-      const session = await loadCloudSession();
+      let session = await loadCloudSession();
+      if (!session?.access_token || !session.device_id) {
+        if (cloudSyncEnabledRef.current) {
+          session = await ensureCloudSession();
+        } else {
+          session = null;
+        }
+      }
       setCloudSession(session);
       cloudSessionRef.current = session;
       setCloudSyncStatus(
         session
-          ? { state: "ready", message: "已登录，token 消耗会自动上报" }
-          : { state: "signed_out", message: "登录后自动上报 token 消耗" },
+          ? { state: "ready", message: cloudSessionMessage(session) }
+          : { state: "signed_out", message: "云端未连接，本地功能正常可用" },
       );
     } catch {
       setCloudSession(null);
@@ -481,9 +488,11 @@ export default function App() {
   async function refreshTokenLeaderboard(
     sessionOverride?: CloudSession | null,
     agentProviderOverride?: AgentProvider,
+    timePeriodOverride?: LeaderboardTimePeriod,
   ) {
     const session = sessionOverride === undefined ? cloudSessionRef.current : sessionOverride;
     const agentProvider = agentProviderOverride ?? leaderboardAgentProviderRef.current;
+    const timePeriod = timePeriodOverride ?? leaderboardTimePeriodRef.current;
     setLeaderboardStatus("loading");
     setLeaderboardError(null);
 
@@ -492,6 +501,7 @@ export default function App() {
         serverUrl: session?.server_url ?? "http://127.0.0.1:8787",
         accessToken: session?.access_token,
         agentProvider,
+        timePeriod,
         limit: 20,
       });
       setLeaderboard(snapshot);
@@ -508,12 +518,31 @@ export default function App() {
     await refreshTokenLeaderboard(undefined, agentProvider);
   }
 
+  async function selectLeaderboardTimePeriod(timePeriod: LeaderboardTimePeriod) {
+    setLeaderboardTimePeriod(timePeriod);
+    leaderboardTimePeriodRef.current = timePeriod;
+    await refreshTokenLeaderboard(undefined, undefined, timePeriod);
+  }
+
+  async function connectCloud(serverUrl: string) {
+    cloudSyncEnabledRef.current = true;
+    updateConfig({ cloudSyncEnabled: true });
+    setCloudSyncStatus({ state: "syncing", message: "正在开启云端同步…" });
+    const session = await connectCloudDevice(serverUrl);
+    setCloudSession(session);
+    cloudSessionRef.current = session;
+    setCloudSyncStatus({ state: "ready", message: cloudSessionMessage(session) });
+    await refreshTokenLeaderboard(session);
+  }
+
   async function signInCloud(request: CloudPhoneLoginRequest) {
+    cloudSyncEnabledRef.current = true;
+    updateConfig({ cloudSyncEnabled: true });
     setCloudSyncStatus({ state: "syncing", message: "正在登录并绑定本机设备" });
     const session = await loginOrRegisterCloud(request);
     setCloudSession(session);
     cloudSessionRef.current = session;
-    setCloudSyncStatus({ state: "ready", message: "已登录，token 消耗会自动上报" });
+    setCloudSyncStatus({ state: "ready", message: cloudSessionMessage(session) });
     await refreshTokenLeaderboard(session);
     if (codexStatus) {
       void syncAgentUsage(codexStatus, "codex", session);
@@ -527,12 +556,27 @@ export default function App() {
     return sendPhoneVerificationCodeCloud(request);
   }
 
+  async function renameCloudDisplayName(displayName: string) {
+    const session = cloudSessionRef.current;
+    if (!session) {
+      throw new Error("尚未连接云服");
+    }
+
+    const updated = await updateCloudDisplayName(session, displayName);
+    setCloudSession(updated);
+    cloudSessionRef.current = updated;
+    setCloudSyncStatus({ state: "ready", message: cloudSessionMessage(updated) });
+    await refreshTokenLeaderboard(updated);
+  }
+
   async function signOutCloud() {
+    cloudSyncEnabledRef.current = false;
+    updateConfig({ cloudSyncEnabled: false });
     await clearCloudSession();
     setCloudSession(null);
     cloudSessionRef.current = null;
     lastUsageUploadKeyRef.current = {};
-    setCloudSyncStatus({ state: "signed_out", message: "登录后自动上报 token 消耗" });
+    setCloudSyncStatus({ state: "signed_out", message: "已断开云端同步" });
     await refreshTokenLeaderboard(null);
   }
 
@@ -582,70 +626,6 @@ export default function App() {
     }
   }
 
-  async function syncFromAgentStatuses(
-    cursorSnapshot: CodexStatusSnapshot | null,
-    codexSnapshot: CodexStatusSnapshot | null,
-  ) {
-    const current = eventRef.current;
-    if (isManualStatusHold(current)) {
-      return;
-    }
-
-    const primary = pickPrimaryAgentMonitor(cursorSnapshot, codexSnapshot);
-
-    if (!primary) {
-      await syncAgentState("attention", "Cursor / Codex 均不可用", "cursor_monitor");
-      return;
-    }
-
-    const { snapshot, label, source } = primary;
-    if (snapshot.state === "working") {
-      await syncAgentState("working", `${label} 正在工作`, source);
-      return;
-    }
-    if (snapshot.state === "completed") {
-      await syncAgentState("completed", `${label} 本轮已完成`, source);
-      return;
-    }
-    if (current.state === "completed") {
-      return;
-    }
-    if (
-      current.source === source ||
-      current.source === "codex_monitor" ||
-      current.source === "cursor_monitor" ||
-      current.source === "boot" ||
-      current.source === "fallback"
-    ) {
-      await syncAgentState("standby", `${label} 待命中`, source);
-    }
-  }
-
-  async function syncAgentState(
-    state: AgentState,
-    message: string,
-    source: "codex_monitor" | "cursor_monitor",
-  ) {
-    const current = eventRef.current;
-    if (
-      (current.source === "codex_monitor" || current.source === "cursor_monitor") &&
-      current.state === state &&
-      current.message === message
-    ) {
-      return;
-    }
-
-    try {
-      const snapshot =
-        source === "cursor_monitor"
-          ? await syncCursorAgentState(state, message)
-          : await syncCodexAgentState(state, message);
-      pushEvent(snapshot);
-    } catch {
-      pushEvent(createStatusEvent(state, message, source));
-    }
-  }
-
   function updateConfig(update: Partial<StoredConfig>) {
     setConfig((currentConfig) => ({ ...currentConfig, ...update }));
   }
@@ -660,20 +640,18 @@ export default function App() {
         alwaysOnTop={config.alwaysOnTop}
         launchAtLogin={config.launchAtLogin}
         lightSettings={config.lightSettings}
-        systemMetrics={systemMetrics}
         aiToolTokens={aiToolTokens}
         aiToolLoading={aiToolLoading}
-        onRefreshAiTools={() => refreshAgentStatuses()}
+        onRefreshAiTools={() => refreshAgentStatuses({ showLoading: true })}
         hardwareStatus={hardwareStatus}
         cloudSession={cloudSession}
         cloudSyncStatus={cloudSyncStatus}
         leaderboard={leaderboard}
         leaderboardAgentProvider={leaderboardAgentProvider}
+        leaderboardTimePeriod={leaderboardTimePeriod}
         leaderboardStatus={leaderboardStatus}
         leaderboardError={leaderboardError}
-        logs={logs}
         onClose={() => void closePetSettings()}
-        onTrigger={(state) => void triggerState(state)}
         onAlwaysOnTopChange={(enabled) => {
           updateConfig({ alwaysOnTop: enabled });
           void setAlwaysOnTop(enabled);
@@ -681,11 +659,15 @@ export default function App() {
         onLaunchAtLoginChange={(enabled) => updateConfig({ launchAtLogin: enabled })}
         onLightSettingsChange={(lightSettings) => updateConfig({ lightSettings })}
         onCloudLogin={signInCloud}
+        onCloudConnect={connectCloud}
         onCloudSendPhoneCode={sendCloudPhoneCode}
+        onCloudRenameDisplayName={renameCloudDisplayName}
         onCloudLogout={signOutCloud}
         onRefreshLeaderboard={() => refreshTokenLeaderboard()}
         onLeaderboardAgentChange={selectLeaderboardAgentProvider}
+        onLeaderboardTimePeriodChange={selectLeaderboardTimePeriod}
         onProbeHardware={() => refreshHardwareStatus({ probe: true })}
+        onTrigger={(state) => void triggerState(state)}
         onExitApp={() => void quitApp()}
       />
     );

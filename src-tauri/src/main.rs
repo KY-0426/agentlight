@@ -31,6 +31,7 @@ const TOP_SNAP_THRESHOLD: i32 = 96;
 const CODEX_ACTIVE_WINDOW_SECONDS: u64 = 12;
 const CODEX_STALE_ACTIVE_WINDOW_SECONDS: u64 = 15 * 60;
 const CODEX_COMPLETED_WINDOW_SECONDS: u64 = 5 * 60;
+const CODEX_PENDING_APPROVAL_SECONDS: u64 = 15;
 const CODEX_SESSION_TAIL_BYTES: u64 = 64 * 1024;
 const AGENT_STATUS_VARIANTS: &[&str] = &["standby", "working", "completed", "attention"];
 const MAX_MESSAGE_LEN: usize = 180;
@@ -41,6 +42,7 @@ const HARDWARE_WATCHER_INTERVAL_MS: u64 = 4000;
 const HARDWARE_WATCHER_RETRY_INTERVAL_MS: u64 = 3000;
 const SETTINGS_WINDOW_GAP_PX: i32 = 16;
 const HARDWARE_STATE_EVENT: &str = "hardware-state";
+const AGENT_MONITOR_INTERVAL_MS: u64 = 1_000;
 const MANUAL_STATUS_HOLD_MS: u128 = 60_000;
 const CLOUD_SESSION_FILE_NAME: &str = "cloud-session.json";
 const INSTALLATION_ID_FILE_NAME: &str = "installation-id";
@@ -216,6 +218,8 @@ pub(crate) struct CodexThreadRow {
 pub(crate) enum CodexThreadActivity {
     Active,
     Completed,
+    /// Codex issued a tool/command call but no output has been written yet.
+    AwaitingFunctionOutput,
     Unknown,
 }
 
@@ -379,6 +383,14 @@ impl AgentRuntime {
                     }
                 }
             }
+        });
+    }
+
+    fn start_agent_monitor_watcher(&self) {
+        let runtime = self.clone();
+        thread::spawn(move || loop {
+            sync_primary_agent_monitor(&runtime);
+            thread::sleep(Duration::from_millis(AGENT_MONITOR_INTERVAL_MS));
         });
     }
 
@@ -979,7 +991,7 @@ fn position_settings_window(app: &AppHandle) -> Result<(), CommandError> {
         code: "window_size_failed",
         message: format!("Could not read main window size: {error}"),
     })?;
-    let settings_size = settings_window.outer_size().unwrap_or(tauri::PhysicalSize::new(760, 560));
+    let settings_size = settings_window.outer_size().unwrap_or(tauri::PhysicalSize::new(780, 620));
 
     let mut target_x = main_position.x + main_size.width as i32 + SETTINGS_WINDOW_GAP_PX;
     let mut target_y = main_position.y;
@@ -1031,6 +1043,7 @@ fn show_settings_window(app: &AppHandle, focus: bool) -> Result<(), CommandError
 
     position_settings_window(app)?;
 
+    let _ = window.unminimize();
     window.show().map_err(|error| CommandError {
         code: "settings_window_show_failed",
         message: format!("Could not show settings window: {error}"),
@@ -1046,7 +1059,7 @@ fn show_settings_window(app: &AppHandle, focus: bool) -> Result<(), CommandError
     }
 
     window
-        .emit(SETTINGS_PAGE_EVENT, "account")
+        .emit(SETTINGS_PAGE_EVENT, "overview")
         .map_err(|error| CommandError {
             code: "settings_window_emit_failed",
             message: format!("Could not select settings page: {error}"),
@@ -1057,7 +1070,7 @@ fn show_settings_window(app: &AppHandle, focus: bool) -> Result<(), CommandError
 
 #[tauri::command]
 fn open_settings_window(app: AppHandle) -> Result<(), CommandError> {
-    show_settings_window(&app, false)
+    show_settings_window(&app, true)
 }
 
 #[tauri::command]
@@ -1076,7 +1089,7 @@ fn exit_app(app: AppHandle) {
 
 fn setup_system_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let open_settings =
-        MenuItem::with_id(app, "open_settings", "打开设置", true, None::<&str>)?;
+        MenuItem::with_id(app, "open_settings", "打开桌宠", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出 Agent Light", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open_settings, &quit])?;
     let icon = app
@@ -1348,6 +1361,7 @@ fn main() {
                 runtime.hardware.apply(&snapshot);
             }
             runtime.start_hardware_watcher();
+            runtime.start_agent_monitor_watcher();
             sync::start_sync_worker();
             if let Err(error) = setup_system_tray(app.handle()) {
                 eprintln!("agent-light: failed to create system tray: {error}");
@@ -1580,7 +1594,13 @@ pub(crate) fn read_codex_status() -> CodexStatusSnapshot {
         active_age_seconds.is_some_and(|seconds| seconds <= CODEX_STALE_ACTIVE_WINDOW_SECONDS);
     let is_recent_completed =
         active_age_seconds.is_some_and(|seconds| seconds <= CODEX_COMPLETED_WINDOW_SECONDS);
-    let state = if thread_activity == CodexThreadActivity::Active && is_stale_active {
+    let state = if thread_activity == CodexThreadActivity::AwaitingFunctionOutput
+        && active_age_seconds.is_some_and(|seconds| seconds >= CODEX_PENDING_APPROVAL_SECONDS)
+    {
+        AgentStatus::Attention
+    } else if thread_activity == CodexThreadActivity::AwaitingFunctionOutput {
+        AgentStatus::Working
+    } else if thread_activity == CodexThreadActivity::Active && is_stale_active {
         AgentStatus::Working
     } else if thread_activity == CodexThreadActivity::Completed && is_recent_completed {
         AgentStatus::Completed
@@ -1689,7 +1709,10 @@ pub(crate) fn classify_codex_thread_activity(tail: &str) -> CodexThreadActivity 
         };
 
         match payload.get("type").and_then(|field| field.as_str()) {
-            Some("function_call") | Some("function_call_output") | Some("reasoning") => {
+            Some("function_call") => {
+                return CodexThreadActivity::AwaitingFunctionOutput;
+            }
+            Some("function_call_output") | Some("reasoning") => {
                 return CodexThreadActivity::Active;
             }
             Some("message") => {
@@ -1820,6 +1843,111 @@ fn monitor_top_for_window(window: &WebviewWindow) -> i32 {
         .or_else(|| window.primary_monitor().ok().flatten())
         .map(|monitor| monitor.position().y)
         .unwrap_or(0)
+}
+
+struct AgentMonitorPick {
+    state: AgentStatus,
+    message: String,
+    source: &'static str,
+}
+
+fn agent_state_priority(state: &AgentStatus) -> u8 {
+    match state {
+        AgentStatus::Attention => 5,
+        AgentStatus::Working => 4,
+        AgentStatus::Completed => 2,
+        AgentStatus::Standby => 1,
+    }
+}
+
+fn monitor_state_label(state: &AgentStatus) -> &'static str {
+    match state {
+        AgentStatus::Working => "正在工作",
+        AgentStatus::Completed => "本轮已完成",
+        AgentStatus::Attention => "需处理",
+        AgentStatus::Standby => "待命中",
+    }
+}
+
+fn pick_primary_agent_monitor(
+    cursor: &CodexStatusSnapshot,
+    codex: &CodexStatusSnapshot,
+) -> Option<AgentMonitorPick> {
+    let mut candidates: Vec<(u8, bool, AgentMonitorPick)> = Vec::new();
+
+    if cursor.available {
+        candidates.push((
+            agent_state_priority(&cursor.state),
+            true,
+            AgentMonitorPick {
+                state: cursor.state.clone(),
+                message: format!("Cursor {}", monitor_state_label(&cursor.state)),
+                source: "cursor_monitor",
+            },
+        ));
+    }
+    if codex.available {
+        candidates.push((
+            agent_state_priority(&codex.state),
+            false,
+            AgentMonitorPick {
+                state: codex.state.clone(),
+                message: format!("Codex {}", monitor_state_label(&codex.state)),
+                source: "codex_monitor",
+            },
+        ));
+    }
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    candidates.sort_by(|left, right| {
+        right.0.cmp(&left.0).then_with(|| {
+            if left.1 && !right.1 {
+                std::cmp::Ordering::Less
+            } else if !left.1 && right.1 {
+                std::cmp::Ordering::Greater
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        })
+    });
+
+    Some(candidates.remove(0).2)
+}
+
+fn sync_primary_agent_monitor(runtime: &AgentRuntime) {
+    let cursor = cursor::read_cursor_status();
+    let codex = read_codex_status();
+
+    let Some(pick) = pick_primary_agent_monitor(&cursor, &codex) else {
+        let _ = runtime.apply(
+            StateRequest {
+                state: AgentStatus::Attention,
+                message: Some("Cursor / Codex 均不可用".to_string()),
+            },
+            "cursor_monitor",
+        );
+        return;
+    };
+
+    let current = match runtime.snapshot() {
+        Ok(snapshot) => snapshot,
+        Err(_) => return,
+    };
+
+    if current.state == pick.state && current.message.as_deref() == Some(pick.message.as_str()) {
+        return;
+    }
+
+    let _ = runtime.apply(
+        StateRequest {
+            state: pick.state,
+            message: Some(pick.message),
+        },
+        pick.source,
+    );
 }
 
 fn start_local_api(runtime: AgentRuntime) {
@@ -2041,8 +2169,17 @@ mod tests {
     const NO_PORTS: &[String] = &[];
 
     #[test]
-    fn classifies_function_call_tail_as_active() {
-        let tail = r#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command"}}"#;
+    fn classifies_pending_function_call_as_awaiting_output() {
+        let tail = r#"{"type":"response_item","payload":{"type":"function_call","name":"shell_command"}}"#;
+        assert_eq!(
+            classify_codex_thread_activity(tail),
+            CodexThreadActivity::AwaitingFunctionOutput
+        );
+    }
+
+    #[test]
+    fn classifies_function_call_output_as_active() {
+        let tail = r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1"}}"#;
         assert_eq!(
             classify_codex_thread_activity(tail),
             CodexThreadActivity::Active

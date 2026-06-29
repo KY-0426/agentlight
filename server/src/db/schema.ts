@@ -18,7 +18,20 @@ import { sql } from "drizzle-orm";
 export const workspaceRoleEnum = pgEnum("workspace_role", ["owner", "admin", "member"]);
 export const desktopPlatformEnum = pgEnum("desktop_platform", ["macos", "windows"]);
 export const inviteCodeStatusEnum = pgEnum("invite_code_status", ["active", "used", "revoked"]);
-export const agentProviderEnum = pgEnum("agent_provider", ["codex", "claude_code", "cursor"]);
+export const agentProviderEnum = pgEnum("agent_provider", [
+  "codex",
+  "claude_code",
+  "cursor",
+  "github_copilot",
+  "trae",
+  "trae_cn",
+  "qoder",
+  "qoder_cn",
+  "codebuddy",
+  "antigravity",
+  "kiro",
+  "devin",
+]);
 
 const timestamps = {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),

@@ -122,6 +122,20 @@ export type UpsertDeviceInput = {
   deviceLabel?: string;
 };
 
+export type BootstrapDeviceInput = {
+  installationId: string;
+  platform: DesktopPlatform;
+  appVersion: string;
+  deviceLabel?: string;
+  passwordHash: string;
+};
+
+export type DeviceBootstrapResult = {
+  identity: RegisteredIdentity;
+  device: DeviceRecord;
+  created: boolean;
+};
+
 export type BindHardwareDeviceInput = {
   userId: string;
   deviceId: string;
@@ -162,10 +176,12 @@ export interface AuthRepository {
   registerOrLoginWithPhone(input: RegisterOrLoginWithPhoneInput): Promise<RegisteredIdentity>;
   findUserByEmail(email: string): Promise<UserRecord | undefined>;
   findUserById(userId: string): Promise<UserRecord | undefined>;
+  updateUserDisplayName(userId: string, displayName: string): Promise<UserRecord>;
   listMemberships(userId: string): Promise<WorkspaceMembershipRecord[]>;
   createRefreshToken(input: CreateRefreshTokenInput): Promise<void>;
   findRefreshToken(tokenHash: string): Promise<RefreshTokenRecord | undefined>;
   revokeRefreshToken(id: string): Promise<void>;
+  bootstrapDevice(input: BootstrapDeviceInput): Promise<DeviceBootstrapResult>;
   upsertDevice(input: UpsertDeviceInput): Promise<DeviceRecord>;
   bindHardwareDevice(input: BindHardwareDeviceInput): Promise<HardwareDeviceRecord>;
   recordCodexThreadUsage(input: RecordCodexThreadUsageInput): Promise<CodexThreadUsageResult>;
@@ -382,6 +398,23 @@ export class DrizzleAuthRepository implements AuthRepository {
     return user ? mapUser(user) : undefined;
   }
 
+  async updateUserDisplayName(userId: string, displayName: string): Promise<UserRecord> {
+    const [user] = await this.db
+      .update(schema.users)
+      .set({
+        displayName: displayName.trim(),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.users.id, userId))
+      .returning();
+
+    if (!user) {
+      throw new AuthRepositoryError("not_found", "User not found", 404);
+    }
+
+    return mapUser(user);
+  }
+
   async listMemberships(userId: string): Promise<WorkspaceMembershipRecord[]> {
     const rows = await this.db
       .select({
@@ -426,6 +459,94 @@ export class DrizzleAuthRepository implements AuthRepository {
 
   async revokeRefreshToken(id: string): Promise<void> {
     await this.db.update(schema.refreshTokens).set({ revokedAt: new Date() }).where(eq(schema.refreshTokens.id, id));
+  }
+
+  async bootstrapDevice(input: BootstrapDeviceInput): Promise<DeviceBootstrapResult> {
+    return this.db.transaction(async (tx) => {
+      const existingDevice = await findDeviceByInstallationId(tx, input.installationId);
+      if (existingDevice) {
+        const [user] = await tx.select().from(schema.users).where(eq(schema.users.id, existingDevice.userId)).limit(1);
+        if (!user || user.disabledAt) {
+          throw new AuthRepositoryError("unauthorized", "Device owner is unavailable", 401);
+        }
+
+        const [device] = await tx
+          .update(schema.devices)
+          .set({
+            platform: input.platform,
+            appVersion: input.appVersion,
+            deviceLabel: input.deviceLabel ?? existingDevice.deviceLabel,
+            lastSeenAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(schema.devices.id, existingDevice.id))
+          .returning();
+
+        return {
+          identity: {
+            user: mapUser(user),
+            workspaces: await listMemberships(tx, user.id),
+            created: false,
+          },
+          device: mapDevice(device),
+          created: false,
+        };
+      }
+
+      const displayName = input.deviceLabel?.trim() || defaultDeviceDisplayName(input.installationId);
+      const [user] = await tx
+        .insert(schema.users)
+        .values({
+          email: syntheticDeviceEmail(input.installationId),
+          passwordHash: input.passwordHash,
+          displayName,
+        })
+        .returning();
+      const [workspace] = await tx
+        .insert(schema.workspaces)
+        .values({ name: `${displayName} Workspace` })
+        .returning();
+      const [membership] = await tx
+        .insert(schema.workspaceMembers)
+        .values({
+          workspaceId: workspace.id,
+          userId: user.id,
+          role: "owner",
+        })
+        .returning();
+      const [device] = await tx
+        .insert(schema.devices)
+        .values({
+          workspaceId: workspace.id,
+          userId: user.id,
+          installationId: input.installationId,
+          platform: input.platform,
+          appVersion: input.appVersion,
+          deviceLabel: input.deviceLabel ?? displayName,
+          lastSeenAt: new Date(),
+        })
+        .returning();
+
+      return {
+        identity: {
+          user: mapUser(user),
+          workspaces: [
+            {
+              workspace: mapWorkspace(workspace),
+              membership: {
+                workspaceId: membership.workspaceId,
+                userId: membership.userId,
+                role: membership.role,
+                joinedAt: membership.joinedAt,
+              },
+            },
+          ],
+          created: true,
+        },
+        device: mapDevice(device),
+        created: true,
+      };
+    });
   }
 
   async upsertDevice(input: UpsertDeviceInput): Promise<DeviceRecord> {
@@ -674,6 +795,15 @@ function buildRollupWhere(input: Omit<GetTokenLeaderboardInput, "limit">) {
   );
 }
 
+async function findDeviceByInstallationId(tx: Transaction, installationId: string) {
+  const [device] = await tx
+    .select()
+    .from(schema.devices)
+    .where(eq(schema.devices.installationId, installationId))
+    .limit(1);
+  return device ? mapDevice(device) : undefined;
+}
+
 async function findCodexThreadForUpdate(tx: Transaction, input: RecordCodexThreadUsageInput) {
   const [thread] = await tx
     .select()
@@ -826,4 +956,13 @@ function toUsageDate(value: number): string {
 function syntheticPhoneEmail(phoneNumber: string): string {
   const normalized = phoneNumber.replace("+", "00");
   return `phone-${normalized}@phone.agent-light.local`;
+}
+
+function syntheticDeviceEmail(installationId: string): string {
+  const normalized = installationId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 64);
+  return `device-${normalized}@device.agent-light.local`;
+}
+
+function defaultDeviceDisplayName(installationId: string): string {
+  return `设备 ${installationId.slice(-4)}`;
 }

@@ -52,7 +52,20 @@ export const desktopPlatformValues = ["macos", "windows"] as const;
 export const desktopPlatformSchema = z.enum(desktopPlatformValues);
 export type DesktopPlatform = z.infer<typeof desktopPlatformSchema>;
 
-export const agentProviderValues = ["codex", "claude_code", "cursor"] as const;
+export const agentProviderValues = [
+  "codex",
+  "cursor",
+  "claude_code",
+  "github_copilot",
+  "trae",
+  "trae_cn",
+  "qoder",
+  "qoder_cn",
+  "codebuddy",
+  "antigravity",
+  "kiro",
+  "devin",
+] as const;
 export const agentProviderSchema = z.enum(agentProviderValues);
 export type AgentProvider = z.infer<typeof agentProviderSchema>;
 
@@ -137,6 +150,16 @@ export const meResponseSchema = z.object({
 });
 export type MeResponse = z.infer<typeof meResponseSchema>;
 
+export const updateProfileRequestSchema = z.object({
+  display_name: z.string().trim().min(1).max(120),
+}).strict();
+export type UpdateProfileRequest = z.infer<typeof updateProfileRequestSchema>;
+
+export const updateProfileResponseSchema = z.object({
+  user: userDtoSchema,
+});
+export type UpdateProfileResponse = z.infer<typeof updateProfileResponseSchema>;
+
 export const authSessionResponseSchema = authTokenPairSchema.extend({
   user: userDtoSchema,
   workspaces: meResponseSchema.shape.workspaces,
@@ -163,6 +186,20 @@ export const deviceDtoSchema = z.object({
   created_at: isoDateStringSchema,
 });
 export type DeviceDto = z.infer<typeof deviceDtoSchema>;
+
+export const deviceBootstrapRequestSchema = z.object({
+  installation_id: z.string().trim().min(12).max(128),
+  platform: desktopPlatformSchema,
+  app_version: z.string().trim().min(1).max(40),
+  device_label: z.string().trim().min(1).max(120).optional(),
+}).strict();
+export type DeviceBootstrapRequest = z.infer<typeof deviceBootstrapRequestSchema>;
+
+export const deviceBootstrapResponseSchema = authSessionResponseSchema.extend({
+  device: deviceDtoSchema,
+  created: z.boolean(),
+});
+export type DeviceBootstrapResponse = z.infer<typeof deviceBootstrapResponseSchema>;
 
 export const hardwareHelloSchema = z.object({
   hardware_device_id: z.string().trim().min(8).max(128),
@@ -249,6 +286,7 @@ export const apiErrorCodeValues = [
   "verification_code_expired",
   "stale_usage_ignored",
   "validation_failed",
+  "rate_limited",
   "internal_error",
 ] as const;
 export const apiErrorCodeSchema = z.enum(apiErrorCodeValues);

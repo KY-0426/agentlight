@@ -3,9 +3,14 @@ export type AiToolId =
   | "codex"
   | "cursor"
   | "github_copilot"
+  | "trae"
+  | "trae_cn"
   | "qoder"
+  | "qoder_cn"
   | "codebuddy"
-  | "antigravity";
+  | "antigravity"
+  | "kiro"
+  | "devin";
 
 export interface AiToolStatus {
   id: AiToolId;
@@ -44,9 +49,14 @@ export const aiToolOrder: AiToolId[] = [
   "cursor",
   "claude_code",
   "github_copilot",
+  "trae",
+  "trae_cn",
   "qoder",
+  "qoder_cn",
   "codebuddy",
   "antigravity",
+  "kiro",
+  "devin",
 ];
 
 export const aiToolAccent: Record<AiToolId, string> = {
@@ -54,9 +64,14 @@ export const aiToolAccent: Record<AiToolId, string> = {
   codex: "#10a37f",
   cursor: "#7c3aed",
   github_copilot: "#24292f",
+  trae: "#3370ff",
+  trae_cn: "#245bdb",
   qoder: "#2563eb",
+  qoder_cn: "#1d4ed8",
   codebuddy: "#0ea5e9",
   antigravity: "#6366f1",
+  kiro: "#ff9900",
+  devin: "#0d9488",
 };
 
 export const aiToolInitials: Record<AiToolId, string> = {
@@ -64,9 +79,14 @@ export const aiToolInitials: Record<AiToolId, string> = {
   codex: "CX",
   cursor: "CU",
   github_copilot: "GH",
+  trae: "TR",
+  trae_cn: "TC",
   qoder: "QD",
+  qoder_cn: "QC",
   codebuddy: "CB",
   antigravity: "AG",
+  kiro: "KI",
+  devin: "DV",
 };
 
 export function isAiToolId(value: string): value is AiToolId {

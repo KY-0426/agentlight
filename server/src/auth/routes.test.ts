@@ -47,6 +47,20 @@ describe("auth routes", () => {
     expect(me.statusCode).toBe(200);
     expect(me.json().data.user.email).toBe("user@example.com");
 
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: "/api/me",
+      headers: {
+        authorization: `Bearer ${body.data.access_token}`,
+      },
+      payload: {
+        display_name: "Renamed User",
+      },
+    });
+
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().data.user.display_name).toBe("Renamed User");
+
     await app.close();
   });
 

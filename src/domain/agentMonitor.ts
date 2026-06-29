@@ -13,8 +13,8 @@ export interface AgentMonitorTarget<T extends AgentMonitorSnapshot> {
 }
 
 const STATE_PRIORITY: Record<AgentState, number> = {
+  attention: 5,
   working: 4,
-  attention: 3,
   completed: 2,
   standby: 1,
 };
@@ -67,26 +67,27 @@ export function pickPrimaryAgentMonitor<T extends AgentMonitorSnapshot>(
   };
 }
 
+function pickActiveAiTool(tools: AiToolTokenUsage[]): AiToolTokenUsage | null {
+  const priority = ["working", "attention", "completed"] as const;
+  for (const state of priority) {
+    const tool = tools.find((item) => item.available && item.state === state);
+    if (tool) {
+      return tool;
+    }
+  }
+
+  return tools.find((item) => item.available) ?? null;
+}
+
+export function pickActiveAiToolName(tools: AiToolTokenUsage[]): string {
+  return pickActiveAiTool(tools)?.name ?? "未连接";
+}
+
 export function pickActiveAiToolLabel(tools: AiToolTokenUsage[]): string {
-  const working = tools.find((tool) => tool.available && tool.state === "working");
-  if (working) {
-    return `${working.name} · ${working.state_label}`;
+  const tool = pickActiveAiTool(tools);
+  if (!tool) {
+    return "暂无可用工具";
   }
 
-  const attention = tools.find((tool) => tool.available && tool.state === "attention");
-  if (attention) {
-    return `${attention.name} · ${attention.state_label}`;
-  }
-
-  const completed = tools.find((tool) => tool.available && tool.state === "completed");
-  if (completed) {
-    return `${completed.name} · ${completed.state_label}`;
-  }
-
-  const available = tools.find((tool) => tool.available);
-  if (available) {
-    return `${available.name} · ${available.state_label}`;
-  }
-
-  return "暂无可用工具";
+  return `${tool.name} · ${tool.state_label}`;
 }

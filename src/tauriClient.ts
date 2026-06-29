@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -11,6 +12,7 @@ import {
 } from "./domain/status";
 import {
   DEFAULT_AGENT_PROVIDER,
+  DEFAULT_LEADERBOARD_SERVER_URL,
   buildTokenLeaderboardUrl,
   getApiErrorMessage,
   normalizeLeaderboardServerUrl,
@@ -31,14 +33,58 @@ export {
   DEFAULT_LEADERBOARD_LIMIT,
   DEFAULT_AGENT_PROVIDER,
   agentProviderLabels,
+  agentProviderOrder,
+  leaderboardTimePeriodLabels,
+  leaderboardTimePeriodOrder,
   type AgentProvider,
+  type LeaderboardTimePeriod,
   type TokenLeaderboardEntry,
   type TokenLeaderboardRequest,
   type TokenLeaderboardResponse,
 } from "./domain/leaderboard";
 
 const TOP_DOCK_THRESHOLD = 36;
-export type SettingsPageTarget = "account" | "leaderboard" | "device" | "effect" | "hardware";
+let cachedAppVersion: string | null = null;
+
+async function resolveAppVersion(): Promise<string> {
+  if (cachedAppVersion) {
+    return cachedAppVersion;
+  }
+  if (!isTauriRuntime()) {
+    cachedAppVersion = "0.1.0";
+    return cachedAppVersion;
+  }
+  try {
+    cachedAppVersion = await getVersion();
+  } catch {
+    cachedAppVersion = "0.1.0";
+  }
+  return cachedAppVersion;
+}
+export type SettingsPageTarget =
+  | "overview"
+  | "assistants"
+  | "leaderboard"
+  | "account"
+  | "preferences"
+  | "effect"
+  | "hardware"
+  | "device";
+
+const SETTINGS_PAGE_TARGETS = new Set<SettingsPageTarget>([
+  "overview",
+  "assistants",
+  "leaderboard",
+  "account",
+  "preferences",
+  "effect",
+  "hardware",
+  "device",
+]);
+
+export function isSettingsPageTarget(value: string): value is SettingsPageTarget {
+  return SETTINGS_PAGE_TARGETS.has(value as SettingsPageTarget);
+}
 
 interface TauriInternalsWindow extends Window {
   __TAURI_INTERNALS__?: unknown;
@@ -95,7 +141,7 @@ export async function openSettingsWindow(): Promise<void> {
     window.history.replaceState(null, "", "?view=settings");
     window.dispatchEvent(new CustomEvent("agent-light-preview-view", { detail: "settings" }));
     window.dispatchEvent(
-      new CustomEvent<SettingsPageTarget>("agent-light-settings-page", { detail: "account" }),
+      new CustomEvent<SettingsPageTarget>("agent-light-settings-page", { detail: "overview" }),
     );
     return;
   }
@@ -109,7 +155,7 @@ export async function listenForSettingsPage(
   if (!isTauriRuntime()) {
     const listener = (event: Event) => {
       const page = (event as CustomEvent<SettingsPageTarget>).detail;
-      if (page === "account" || page === "leaderboard" || page === "device" || page === "effect" || page === "hardware") {
+      if (isSettingsPageTarget(page)) {
         handler(page);
       }
     };
@@ -119,7 +165,7 @@ export async function listenForSettingsPage(
 
   return listen<SettingsPageTarget>("agent-settings-page", (event) => {
     const page = event.payload;
-    if (page === "account" || page === "leaderboard" || page === "device" || page === "effect" || page === "hardware") {
+    if (isSettingsPageTarget(page)) {
       handler(page);
     }
   });
@@ -258,6 +304,8 @@ export interface CloudPhoneLoginRequest {
   verificationCode: string;
   displayName?: string;
 }
+
+export type CloudServerHealth = "healthy" | "unreachable" | "invalid_url";
 
 export interface CodexUsageUploadResult {
   codex_thread_id: string;
@@ -474,6 +522,108 @@ export async function loadCloudSession(): Promise<CloudSession | null> {
   return invoke<CloudSession | null>("load_cloud_session");
 }
 
+export function isDeviceCloudAccount(session: CloudSession | null | undefined): boolean {
+  return Boolean(
+    session &&
+      !session.user_phone_number &&
+      session.user_email.endsWith("@device.agent-light.local"),
+  );
+}
+
+export async function probeCloudServerHealth(serverUrl: string): Promise<CloudServerHealth> {
+  try {
+    const normalizedServerUrl = normalizeCloudServerUrl(serverUrl);
+    const response = await fetch(buildApiUrl(normalizedServerUrl, "/api/health"), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+    });
+    return response.ok ? "healthy" : "unreachable";
+  } catch (error) {
+    if (error instanceof Error && /服务端|格式/.test(error.message)) {
+      return "invalid_url";
+    }
+    return "unreachable";
+  }
+}
+
+export async function connectCloudDevice(serverUrl: string): Promise<CloudSession> {
+  const health = await probeCloudServerHealth(serverUrl);
+  if (health === "invalid_url") {
+    throw new Error("服务端地址格式不正确");
+  }
+  if (health === "unreachable") {
+    throw new Error("无法连接云端，请检查网络后重试");
+  }
+  return bootstrapCloudDevice(serverUrl);
+}
+
+export async function bootstrapCloudDevice(
+  serverUrl = DEFAULT_LEADERBOARD_SERVER_URL,
+): Promise<CloudSession> {
+  const normalizedServerUrl = normalizeCloudServerUrl(serverUrl);
+  const installationId = await getInstallationId();
+  const appVersion = await resolveAppVersion();
+  const response = await fetch(buildApiUrl(normalizedServerUrl, "/api/devices/bootstrap"), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      installation_id: installationId,
+      platform: detectDesktopPlatform(),
+      app_version: appVersion,
+      device_label: detectFriendlyDeviceLabel(),
+    }),
+  });
+
+  const payload = await readJsonPayload(response);
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload) ?? `设备注册接口返回 ${response.status}`);
+  }
+  if (!isSuccessRecord(payload) || !isDeviceBootstrapPayload(payload.data)) {
+    throw new Error("设备注册响应格式不正确");
+  }
+
+  const data = payload.data;
+  const workspaceId = data.workspaces[0]?.workspace.id;
+  if (!workspaceId) {
+    throw new Error("设备注册响应缺少 workspace");
+  }
+
+  return saveCloudSession({
+    server_url: normalizedServerUrl,
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at_ms: Date.now() + data.expires_in_seconds * 1000,
+    user_id: data.user.id,
+    user_email: data.user.email,
+    user_phone_number: data.user.phone_number,
+    display_name: data.user.display_name,
+    workspace_id: workspaceId,
+    device_id: data.device.id,
+    installation_id: installationId,
+  });
+}
+
+export async function ensureCloudSession(
+  serverUrl = DEFAULT_LEADERBOARD_SERVER_URL,
+): Promise<CloudSession | null> {
+  const existing = await loadCloudSession();
+  if (existing?.access_token && existing.device_id) {
+    return existing;
+  }
+  if (!isTauriRuntime()) {
+    return existing;
+  }
+
+  try {
+    return await connectCloudDevice(serverUrl);
+  } catch {
+    return existing;
+  }
+}
+
 export async function saveCloudSession(session: CloudSession): Promise<CloudSession> {
   if (!isTauriRuntime()) {
     return session;
@@ -529,6 +679,39 @@ export async function loginOrRegisterCloud(request: CloudPhoneLoginRequest): Pro
     display_name: request.displayName,
   });
   return saveSessionWithRegisteredDevice(request.serverUrl, auth);
+}
+
+export async function updateCloudDisplayName(
+  session: CloudSession,
+  displayName: string,
+): Promise<CloudSession> {
+  const trimmed = displayName.trim();
+  if (!trimmed) {
+    throw new Error("昵称不能为空");
+  }
+
+  const response = await fetch(buildApiUrl(session.server_url, "/api/me"), {
+    method: "PATCH",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ display_name: trimmed }),
+  });
+
+  const payload = await readJsonPayload(response);
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload) ?? `昵称更新接口返回 ${response.status}`);
+  }
+  if (!isSuccessRecord(payload) || !isUpdateProfilePayload(payload.data)) {
+    throw new Error("昵称更新响应格式不正确");
+  }
+
+  return saveCloudSession({
+    ...session,
+    display_name: payload.data.user.display_name,
+  });
 }
 
 export async function getTokenLeaderboard(
@@ -686,7 +869,7 @@ async function registerCloudDevice(
       installation_id: installationId,
       platform: detectDesktopPlatform(),
       app_version: "0.1.0",
-      device_label: navigator.platform || "Desktop",
+      device_label: detectFriendlyDeviceLabel(),
     }),
   });
 
@@ -737,6 +920,17 @@ function isAuthSessionPayload(value: unknown): value is AuthSessionPayload {
   );
 }
 
+function isDeviceBootstrapPayload(
+  value: unknown,
+): value is AuthSessionPayload & { device: { id: string }; created: boolean } {
+  if (!isAuthSessionPayload(value) || !isRecord(value)) {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return isRecord(record.device) && typeof record.device.id === "string";
+}
+
 function isPhoneCodePayload(value: unknown): value is CloudPhoneCodeResponse {
   return (
     isRecord(value) &&
@@ -745,6 +939,21 @@ function isPhoneCodePayload(value: unknown): value is CloudPhoneCodeResponse {
     value.delivery === "dev" &&
     (value.dev_code === undefined || typeof value.dev_code === "string")
   );
+}
+
+function isUpdateProfilePayload(value: unknown): value is { user: { display_name: string } } {
+  return isRecord(value) && isRecord(value.user) && typeof value.user.display_name === "string";
+}
+
+function detectFriendlyDeviceLabel(): string {
+  const platform = navigator.platform.toLowerCase();
+  if (platform.includes("win")) {
+    return "Windows 电脑";
+  }
+  if (platform.includes("mac")) {
+    return "Mac 电脑";
+  }
+  return "Linux 电脑";
 }
 
 function detectDesktopPlatform(): "macos" | "windows" | "linux" {

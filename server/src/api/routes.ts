@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import {
   codexThreadUsageRequestSchema,
   codexThreadUsageResponseSchema,
+  deviceBootstrapRequestSchema,
+  deviceBootstrapResponseSchema,
   deviceDtoSchema,
   deviceRegisterRequestSchema,
   forbiddenUsagePayloadKeys,
@@ -12,7 +14,10 @@ import {
 } from "@agent-light/shared";
 import type { AuthRepository, DeviceRecord, HardwareDeviceRecord, LeaderboardEntryRecord, UserRecord } from "../auth/repository";
 import { AuthRepositoryError } from "../auth/repository";
-import { authenticate, requireWorkspaceMembership, sendError } from "../auth/http";
+import { createOpaqueToken, hashPassword } from "../auth/crypto";
+import { authenticate, requireWorkspaceMembership, sendError, toUserDto, toWorkspaceDtos } from "../auth/http";
+import { issueTokenPair } from "../auth/tokens";
+import { isBootstrapRateLimited } from "../http/bootstrap-rate-limit";
 import type { ServerEnv } from "../config/env";
 
 export type MvpRoutesOptions = {
@@ -22,6 +27,48 @@ export type MvpRoutesOptions = {
 
 export async function registerMvpRoutes(app: FastifyInstance, options: MvpRoutesOptions): Promise<void> {
   const { env, repository } = options;
+
+  app.post("/api/devices/bootstrap", async (request, reply) => {
+    const clientKey = request.ip || "unknown";
+    if (isBootstrapRateLimited(clientKey)) {
+      return sendError(reply, 429, "rate_limited", "Too many bootstrap requests, try again later");
+    }
+
+    const parsed = deviceBootstrapRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return sendError(reply, 400, "validation_failed", "Invalid device bootstrap payload");
+    }
+
+    try {
+      const bootstrap = await repository.bootstrapDevice({
+        installationId: parsed.data.installation_id,
+        platform: parsed.data.platform,
+        appVersion: parsed.data.app_version,
+        deviceLabel: parsed.data.device_label,
+        passwordHash: await hashPassword(createOpaqueToken()),
+      });
+      if (bootstrap.identity.user.disabledAt) {
+        return sendError(reply, 401, "unauthorized", "User is disabled");
+      }
+
+      const tokens = await issueTokenPair(bootstrap.identity.user.id, repository, env);
+      const response = deviceBootstrapResponseSchema.parse({
+        ...tokens,
+        user: toUserDto(bootstrap.identity.user),
+        workspaces: toWorkspaceDtos(bootstrap.identity.workspaces),
+        device: toDeviceDto(bootstrap.device),
+        created: bootstrap.created,
+      });
+
+      return reply.status(bootstrap.created ? 201 : 200).send({ ok: true, data: response });
+    } catch (error) {
+      if (error instanceof AuthRepositoryError) {
+        return sendError(reply, error.statusCode, error.code, error.message);
+      }
+
+      throw error;
+    }
+  });
 
   app.post("/api/devices/register", async (request, reply) => {
     const user = await authenticate(request, reply, env, repository);

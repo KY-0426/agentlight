@@ -279,6 +279,56 @@ paths:
                             workspace: { $ref: '#/components/schemas/Workspace' }
                             membership: { $ref: '#/components/schemas/Membership' }
         '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      summary: 更新当前用户资料
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display_name]
+              properties:
+                display_name: { type: string, minLength: 1, maxLength: 120 }
+      responses:
+        '200':
+          description: 更新后的用户信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /api/devices/bootstrap:
+    post:
+      summary: 安装时自动创建设备账户
+      description: |
+        无需登录。按 installation_id 幂等创建或恢复设备账户，返回 access/refresh token 与 device 记录。
+        后续可通过手机号绑定合并多台设备（规划中）。
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [installation_id, platform, app_version]
+              properties:
+                installation_id: { type: string }
+                platform: { type: string, enum: [macos, windows] }
+                app_version: { type: string }
+                device_label: { type: string }
+      responses:
+        '200':
+          description: 已有设备账户，重新签发 token
+        '201':
+          description: 新建设备账户
   /api/devices/register:
     post:
       summary: 注册/更新桌面设备
@@ -338,7 +388,7 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
   /api/usage/codex-thread:
     post:
-      summary: 上报 Codex 线程 token 用量
+      summary: 上报 Agent 线程 token 用量（Codex / Cursor / Claude Code）
       description: |
         同线程重复上报会去重，旧 tokens_used 不会覆盖较新累计值。
         payload 严格校验，禁止 cwd/rollout_path/api_key/cookie/token/private_key 字段。
@@ -352,7 +402,7 @@ paths:
               properties:
                 workspace_id: { type: string, format: uuid }
                 device_id: { type: string, format: uuid }
-                agent_provider: { type: string, enum: [codex, claude_code], default: codex }
+                agent_provider: { type: string, enum: [codex, claude_code, cursor, github_copilot, trae, trae_cn, qoder, qoder_cn, codebuddy, antigravity, kiro, devin], default: codex }
                 codex_thread_id: { type: string }
                 model: { type: string }
                 tokens_used: { type: integer, minimum: 0 }
@@ -382,12 +432,12 @@ paths:
       summary: Token 排行榜
       description: |
         默认全员榜（可匿名）。带 workspace_id 时为团队榜（必须属于该 workspace）。
-        带 agent_provider 时按 Codex / Claude Code 分榜。
+        带 agent_provider 时按 Codex / Cursor / Claude Code 分榜。
       security: []
       parameters:
         - name: agent_provider
           in: query
-          schema: { type: string, enum: [codex, claude_code], default: codex }
+          schema: { type: string, enum: [codex, claude_code, cursor, github_copilot, trae, trae_cn, qoder, qoder_cn, codebuddy, antigravity, kiro, devin], default: codex }
         - name: workspace_id
           in: query
           schema: { type: string, format: uuid }

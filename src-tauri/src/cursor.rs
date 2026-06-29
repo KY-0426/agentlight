@@ -13,10 +13,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-const CURSOR_STREAMING_GRACE_SECONDS: u64 = 2;
-const CURSOR_USER_PENDING_SECONDS: u64 = 180;
 const CURSOR_COMPLETED_WINDOW_SECONDS: u64 = 5 * 60;
-const CURSOR_STATUS_CACHE_TTL_MS: u128 = 1_000;
+const CURSOR_USER_PENDING_SECONDS: u64 = 180;
+const CURSOR_SHELL_PENDING_APPROVAL_SECONDS: u64 = 4;
+const CURSOR_STATUS_CACHE_TTL_MS: u128 = 1_500;
+const CURSOR_TRANSCRIPT_TAIL_BYTES: u64 = 64 * 1024;
+const CURSOR_TRANSCRIPT_INDEX_REFRESH_MS: u128 = 5_000;
+const CURSOR_CONTENT_STABLE_READS: u8 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CursorTailSignal {
@@ -31,26 +34,34 @@ struct CursorTranscript {
     composer_id: String,
     updated_at_ms: u128,
     tail_signal: CursorTailSignal,
+    pending_shell_tool: bool,
+    line_count: usize,
     tokens_used: u64,
     model: Option<String>,
 }
 
-fn resolve_cursor_state(tail: CursorTailSignal, age_seconds: Option<u64>) -> AgentStatus {
-    let age = age_seconds.unwrap_or(u64::MAX);
-    let is_streaming = age <= CURSOR_STREAMING_GRACE_SECONDS;
-    let is_user_pending = age <= CURSOR_USER_PENDING_SECONDS;
-    let is_recent_completed = age <= CURSOR_COMPLETED_WINDOW_SECONDS;
-
-    match tail {
-        CursorTailSignal::ToolUseActive => AgentStatus::Working,
-        CursorTailSignal::AssistantTextOnly if is_streaming => AgentStatus::Working,
-        CursorTailSignal::AssistantTextOnly if is_recent_completed => AgentStatus::Completed,
-        CursorTailSignal::AssistantTextOnly => AgentStatus::Standby,
-        CursorTailSignal::UserWaiting if is_user_pending => AgentStatus::Working,
-        CursorTailSignal::UserWaiting => AgentStatus::Standby,
-        CursorTailSignal::None => AgentStatus::Standby,
-    }
+#[derive(Debug, Clone)]
+struct TranscriptIndex {
+    last_full_scan_ms: u128,
+    best_path: Option<PathBuf>,
+    best_mtime: u128,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TranscriptFingerprint {
+    path: PathBuf,
+    mtime_ms: u128,
+    line_count: usize,
+    tail: CursorTailSignal,
+    stable_reads: u8,
+}
+
+static TRANSCRIPT_INDEX: Mutex<TranscriptIndex> = Mutex::new(TranscriptIndex {
+    last_full_scan_ms: 0,
+    best_path: None,
+    best_mtime: 0,
+});
+static TRANSCRIPT_STABILITY: Mutex<Option<TranscriptFingerprint>> = Mutex::new(None);
 
 #[derive(Debug, Clone)]
 struct CursorStatusCache {
@@ -62,18 +73,91 @@ struct CursorStatusCache {
 
 static CURSOR_STATUS_CACHE: Mutex<Option<CursorStatusCache>> = Mutex::new(None);
 
+fn shell_pending_needs_attention(
+    content_stable: bool,
+    age_seconds: Option<u64>,
+    pending_shell_tool: bool,
+) -> bool {
+    pending_shell_tool
+        && content_stable
+        && age_seconds.is_some_and(|seconds| seconds >= CURSOR_SHELL_PENDING_APPROVAL_SECONDS)
+}
+
+fn resolve_cursor_state(
+    tail: CursorTailSignal,
+    content_stable: bool,
+    age_seconds: Option<u64>,
+    pending_shell_tool: bool,
+) -> AgentStatus {
+    let is_recent_completed = age_seconds.is_some_and(|seconds| seconds <= CURSOR_COMPLETED_WINDOW_SECONDS);
+
+    if shell_pending_needs_attention(content_stable, age_seconds, pending_shell_tool) {
+        return AgentStatus::Attention;
+    }
+
+    match tail {
+        CursorTailSignal::ToolUseActive => AgentStatus::Working,
+        CursorTailSignal::AssistantTextOnly if !content_stable => AgentStatus::Working,
+        CursorTailSignal::AssistantTextOnly if is_recent_completed => AgentStatus::Completed,
+        CursorTailSignal::AssistantTextOnly => AgentStatus::Standby,
+        CursorTailSignal::UserWaiting if age_seconds.is_some_and(|seconds| seconds >= CURSOR_USER_PENDING_SECONDS) => {
+            AgentStatus::Standby
+        }
+        CursorTailSignal::UserWaiting => AgentStatus::Working,
+        CursorTailSignal::None => AgentStatus::Standby,
+    }
+}
+
+fn content_is_stable(path: &Path, mtime_ms: u128, line_count: usize, tail: CursorTailSignal) -> bool {
+    let Ok(mut guard) = TRANSCRIPT_STABILITY.lock() else {
+        return false;
+    };
+
+    let stable = match guard.as_mut() {
+        Some(fingerprint)
+            if fingerprint.path == path
+                && fingerprint.mtime_ms == mtime_ms
+                && fingerprint.line_count == line_count
+                && fingerprint.tail == tail =>
+        {
+            fingerprint.stable_reads = fingerprint.stable_reads.saturating_add(1);
+            fingerprint.stable_reads >= CURSOR_CONTENT_STABLE_READS
+        }
+        Some(fingerprint) => {
+            fingerprint.path = path.to_path_buf();
+            fingerprint.mtime_ms = mtime_ms;
+            fingerprint.line_count = line_count;
+            fingerprint.tail = tail;
+            fingerprint.stable_reads = 1;
+            false
+        }
+        None => {
+            *guard = Some(TranscriptFingerprint {
+                path: path.to_path_buf(),
+                mtime_ms,
+                line_count,
+                tail,
+                stable_reads: 1,
+            });
+            false
+        }
+    };
+
+    stable
+}
+
 pub(crate) fn read_cursor_status() -> CodexStatusSnapshot {
     let sampled_at_ms = crate::timestamp_ms();
     if let Some(cached) = cached_cursor_status(sampled_at_ms) {
         return cached;
     }
 
-    let latest_identity = find_latest_transcript_identity();
+    let latest_identity = find_latest_transcript_identity(sampled_at_ms);
     let latest = latest_identity.as_ref().and_then(|(path, updated_at_ms)| {
         let composer_id = path.parent()?.file_name()?.to_string_lossy().into_owned();
         parse_transcript(path, &composer_id, *updated_at_ms)
     });
-    let snapshot = build_cursor_status(sampled_at_ms, latest);
+    let snapshot = build_cursor_status(sampled_at_ms, latest_identity.as_ref().map(|(path, _)| path), latest);
     if let Ok(mut cache) = CURSOR_STATUS_CACHE.lock() {
         if let Some((path, mtime)) = latest_identity {
             *cache = Some(CursorStatusCache {
@@ -107,43 +191,9 @@ fn cached_cursor_status(sampled_at_ms: u128) -> Option<CodexStatusSnapshot> {
     })
 }
 
-fn find_latest_transcript_identity() -> Option<(PathBuf, u128)> {
-    let projects_root = cursor_projects_root()?;
-    if !projects_root.is_dir() {
-        return None;
-    }
-
-    let mut best_path: Option<PathBuf> = None;
-    let mut best_mtime = 0_u128;
-
-    for project_entry in fs::read_dir(&projects_root).ok()?.flatten() {
-        let transcripts_dir = project_entry.path().join("agent-transcripts");
-        if !transcripts_dir.is_dir() {
-            continue;
-        }
-        for composer_entry in fs::read_dir(&transcripts_dir).ok()?.flatten() {
-            let composer_dir = composer_entry.path();
-            if !composer_dir.is_dir() {
-                continue;
-            }
-            let composer_id = composer_dir.file_name()?.to_string_lossy();
-            let transcript_path = composer_dir.join(format!("{composer_id}.jsonl"));
-            if !transcript_path.is_file() {
-                continue;
-            }
-            let updated_at_ms = file_modified_ms(&transcript_path)?;
-            if updated_at_ms > best_mtime {
-                best_mtime = updated_at_ms;
-                best_path = Some(transcript_path);
-            }
-        }
-    }
-
-    best_path.map(|path| (path, best_mtime))
-}
-
 fn build_cursor_status(
     sampled_at_ms: u128,
+    transcript_path: Option<&PathBuf>,
     latest: Option<CursorTranscript>,
 ) -> CodexStatusSnapshot {
     let (
@@ -163,7 +213,22 @@ fn build_cursor_status(
                 .saturating_sub(transcript.updated_at_ms)
                 .checked_div(1000)
                 .and_then(|seconds| u64::try_from(seconds).ok());
-            let state = resolve_cursor_state(transcript.tail_signal, active_age_seconds);
+            let content_stable = transcript_path
+                .map(|path| {
+                    content_is_stable(
+                        path,
+                        transcript.updated_at_ms,
+                        transcript.line_count,
+                        transcript.tail_signal,
+                    )
+                })
+                .unwrap_or(false);
+            let state = resolve_cursor_state(
+                transcript.tail_signal,
+                content_stable,
+                active_age_seconds,
+                transcript.pending_shell_tool,
+            );
             let is_working = state == AgentStatus::Working;
 
             (
@@ -218,6 +283,72 @@ fn build_cursor_status(
     }
 }
 
+fn find_latest_transcript_identity(sampled_at_ms: u128) -> Option<(PathBuf, u128)> {
+    if let Some(hot) = hot_transcript_identity(sampled_at_ms) {
+        return Some(hot);
+    }
+    scan_latest_transcript_identity(sampled_at_ms)
+}
+
+fn hot_transcript_identity(sampled_at_ms: u128) -> Option<(PathBuf, u128)> {
+    let index = TRANSCRIPT_INDEX.lock().ok()?;
+    let cached_path = index.best_path.as_ref()?;
+    if sampled_at_ms.saturating_sub(index.last_full_scan_ms) > CURSOR_TRANSCRIPT_INDEX_REFRESH_MS {
+        return None;
+    }
+
+    let mtime = file_modified_ms(cached_path)?;
+    Some((cached_path.clone(), mtime))
+}
+
+fn scan_latest_transcript_identity(sampled_at_ms: u128) -> Option<(PathBuf, u128)> {
+    let projects_root = cursor_projects_root()?;
+    if !projects_root.is_dir() {
+        return None;
+    }
+
+    let mut best_path: Option<PathBuf> = None;
+    let mut best_mtime = 0_u128;
+
+    for project_entry in fs::read_dir(&projects_root).ok()?.flatten() {
+        let transcripts_dir = project_entry.path().join("agent-transcripts");
+        if !transcripts_dir.is_dir() {
+            continue;
+        }
+        for composer_entry in fs::read_dir(&transcripts_dir).ok()?.flatten() {
+            let composer_dir = composer_entry.path();
+            if !composer_dir.is_dir() {
+                continue;
+            }
+            if composer_dir
+                .to_string_lossy()
+                .replace('/', "\\")
+                .contains("\\subagents\\")
+            {
+                continue;
+            }
+            let composer_id = composer_dir.file_name()?.to_string_lossy();
+            let transcript_path = composer_dir.join(format!("{composer_id}.jsonl"));
+            if !transcript_path.is_file() {
+                continue;
+            }
+            let updated_at_ms = file_modified_ms(&transcript_path)?;
+            if updated_at_ms > best_mtime {
+                best_mtime = updated_at_ms;
+                best_path = Some(transcript_path);
+            }
+        }
+    }
+
+    if let Ok(mut index) = TRANSCRIPT_INDEX.lock() {
+        index.last_full_scan_ms = sampled_at_ms;
+        index.best_path = best_path.clone();
+        index.best_mtime = best_mtime;
+    }
+
+    best_path.map(|path| (path, best_mtime))
+}
+
 fn cursor_projects_root() -> Option<PathBuf> {
     if let Ok(custom) = std::env::var("AGENT_LIGHT_CURSOR_HOME") {
         let path = PathBuf::from(custom);
@@ -248,7 +379,7 @@ fn parse_transcript(path: &Path, composer_id: &str, updated_at_ms: u128) -> Opti
     let file = fs::File::open(path).ok()?;
     let mut reader = BufReader::new(file);
     let file_len = reader.seek(SeekFrom::End(0)).ok()?;
-    let tail_start = file_len.saturating_sub(256 * 1024);
+    let tail_start = file_len.saturating_sub(CURSOR_TRANSCRIPT_TAIL_BYTES);
     reader.seek(SeekFrom::Start(tail_start)).ok()?;
 
     let mut lines = Vec::new();
@@ -269,17 +400,20 @@ fn parse_transcript(path: &Path, composer_id: &str, updated_at_ms: u128) -> Opti
         }
     }
 
-    let (tail_signal, tokens_used, model) = analyze_transcript_lines(&lines);
+    let line_count = lines.len();
+    let (tail_signal, pending_shell_tool, tokens_used, model) = analyze_transcript_lines(&lines);
     Some(CursorTranscript {
         composer_id: composer_id.to_string(),
         updated_at_ms,
         tail_signal,
+        pending_shell_tool,
+        line_count,
         tokens_used,
         model,
     })
 }
 
-fn analyze_transcript_lines(lines: &[String]) -> (CursorTailSignal, u64, Option<String>) {
+fn analyze_transcript_lines(lines: &[String]) -> (CursorTailSignal, bool, u64, Option<String>) {
     let mut tokens_used = 0u64;
     let mut model = None;
 
@@ -296,7 +430,53 @@ fn analyze_transcript_lines(lines: &[String]) -> (CursorTailSignal, u64, Option<
         }
     }
 
-    (classify_cursor_tail(lines), tokens_used, model)
+    (
+        classify_cursor_tail(lines),
+        tail_has_pending_shell_tool(lines),
+        tokens_used,
+        model,
+    )
+}
+
+fn tail_has_pending_shell_tool(lines: &[String]) -> bool {
+    for line in lines.iter().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+
+        if value.get("type").and_then(Value::as_str) == Some("turn_ended") {
+            continue;
+        }
+
+        match value.get("role").and_then(Value::as_str) {
+            Some("user") => continue,
+            Some("assistant") => {}
+            _ => break,
+        }
+
+        let Some(items) = value
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_array)
+        else {
+            break;
+        };
+
+        let mut has_tool = false;
+        let mut has_shell = false;
+        for item in items {
+            if item.get("type").and_then(Value::as_str) == Some("tool_use") {
+                has_tool = true;
+                if item.get("name").and_then(Value::as_str) == Some("Shell") {
+                    has_shell = true;
+                }
+            }
+        }
+
+        return has_tool && has_shell;
+    }
+
+    false
 }
 
 fn classify_cursor_tail(lines: &[String]) -> CursorTailSignal {
@@ -386,8 +566,9 @@ mod tests {
             r#"{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}"#
                 .to_string(),
         ];
-        let (tail, tokens, _) = analyze_transcript_lines(&lines);
+        let (tail, pending_shell, tokens, _) = analyze_transcript_lines(&lines);
         assert_eq!(tail, CursorTailSignal::ToolUseActive);
+        assert!(!pending_shell);
         assert_eq!(tokens, 1);
     }
 
@@ -400,7 +581,7 @@ mod tests {
             r#"{"role":"assistant","message":{"content":[{"type":"text","text":"done"}]}}"#
                 .to_string(),
         ];
-        let (tail, tokens, _) = analyze_transcript_lines(&lines);
+        let (tail, _, tokens, _) = analyze_transcript_lines(&lines);
         assert_eq!(tail, CursorTailSignal::AssistantTextOnly);
         assert_eq!(tokens, 1);
     }
@@ -412,22 +593,82 @@ mod tests {
                 .to_string(),
             r#"{"role":"user","message":{"content":[{"type":"text","text":"next"}]}}"#.to_string(),
         ];
-        let (tail, _, _) = analyze_transcript_lines(&lines);
+        let (tail, _, _, _) = analyze_transcript_lines(&lines);
         assert_eq!(tail, CursorTailSignal::UserWaiting);
     }
 
     #[test]
-    fn resolves_completed_after_stale_final_assistant_reply() {
+    fn resolves_attention_when_shell_tool_waits_for_approval() {
         assert_eq!(
-            resolve_cursor_state(CursorTailSignal::AssistantTextOnly, Some(3)),
+            resolve_cursor_state(CursorTailSignal::ToolUseActive, true, Some(4), true),
+            AgentStatus::Attention
+        );
+    }
+
+    #[test]
+    fn keeps_shell_tool_working_before_approval_threshold() {
+        assert_eq!(
+            resolve_cursor_state(CursorTailSignal::ToolUseActive, true, Some(2), true),
+            AgentStatus::Working
+        );
+    }
+
+    #[test]
+    fn does_not_flag_non_shell_tool_stall_as_attention() {
+        assert_eq!(
+            resolve_cursor_state(CursorTailSignal::ToolUseActive, true, Some(60), false),
+            AgentStatus::Working
+        );
+    }
+
+    #[test]
+    fn user_waiting_becomes_standby_after_pending_window() {
+        assert_eq!(
+            resolve_cursor_state(CursorTailSignal::UserWaiting, false, Some(200), false),
+            AgentStatus::Standby
+        );
+    }
+
+    #[test]
+    fn detects_pending_shell_tool_from_transcript_tail() {
+        let lines = vec![
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"build"}]}}"#.to_string(),
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"running"},{"type":"tool_use","name":"Shell","input":{"command":"npm run build"}}]}}"#
+                .to_string(),
+        ];
+        let (tail, pending_shell, _, _) = analyze_transcript_lines(&lines);
+        assert_eq!(tail, CursorTailSignal::ToolUseActive);
+        assert!(pending_shell);
+    }
+
+    #[test]
+    fn detects_pending_shell_tool_after_user_follow_up() {
+        let lines = vec![
+            r#"{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Shell","input":{"command":"git log"}}]}}"#
+                .to_string(),
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"why no red light?"}]}}"#.to_string(),
+        ];
+        let (tail, pending_shell, _, _) = analyze_transcript_lines(&lines);
+        assert_eq!(tail, CursorTailSignal::UserWaiting);
+        assert!(pending_shell);
+        assert_eq!(
+            resolve_cursor_state(tail, true, Some(4), pending_shell),
+            AgentStatus::Attention
+        );
+    }
+
+    #[test]
+    fn resolves_completed_when_content_is_stable() {
+        assert_eq!(
+            resolve_cursor_state(CursorTailSignal::AssistantTextOnly, true, Some(3), false),
             AgentStatus::Completed
         );
     }
 
     #[test]
-    fn resolves_working_while_final_assistant_reply_is_still_streaming() {
+    fn resolves_working_while_assistant_reply_is_still_changing() {
         assert_eq!(
-            resolve_cursor_state(CursorTailSignal::AssistantTextOnly, Some(1)),
+            resolve_cursor_state(CursorTailSignal::AssistantTextOnly, false, Some(3), false),
             AgentStatus::Working
         );
     }
@@ -435,8 +676,16 @@ mod tests {
     #[test]
     fn resolves_standby_after_completed_window() {
         assert_eq!(
-            resolve_cursor_state(CursorTailSignal::AssistantTextOnly, Some(400)),
+            resolve_cursor_state(CursorTailSignal::AssistantTextOnly, true, Some(400), false),
             AgentStatus::Standby
+        );
+    }
+
+    #[test]
+    fn user_waiting_is_working_within_pending_window() {
+        assert_eq!(
+            resolve_cursor_state(CursorTailSignal::UserWaiting, false, Some(60), false),
+            AgentStatus::Working
         );
     }
 
@@ -450,10 +699,10 @@ mod tests {
             r#"{"role":"assistant","message":{"content":[{"type":"text","text":"**结论**：退出状态测试..."}]}}"#
                 .to_string(),
         ];
-        let (tail, _, _) = analyze_transcript_lines(&lines);
+        let (tail, _, _, _) = analyze_transcript_lines(&lines);
         assert_eq!(tail, CursorTailSignal::AssistantTextOnly);
         assert_eq!(
-            resolve_cursor_state(tail, Some(3)),
+            resolve_cursor_state(tail, true, Some(3), false),
             AgentStatus::Completed
         );
     }
@@ -466,15 +715,11 @@ mod tests {
             r#"{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\n检查一下对吗？\n</user_query>"}]}}"#
                 .to_string(),
         ];
-        let (tail, _, _) = analyze_transcript_lines(&lines);
+        let (tail, _, _, _) = analyze_transcript_lines(&lines);
         assert_eq!(tail, CursorTailSignal::UserWaiting);
         assert_eq!(
-            resolve_cursor_state(tail, Some(5)),
+            resolve_cursor_state(tail, false, Some(5), false),
             AgentStatus::Working
-        );
-        assert_eq!(
-            resolve_cursor_state(tail, Some(200)),
-            AgentStatus::Standby
         );
     }
 
@@ -485,7 +730,14 @@ mod tests {
             r#"{"role":"assistant","message":{"content":[{"type":"text","text":"checking"},{"type":"tool_use","name":"Read"}]}}"#
                 .to_string(),
         ];
-        let (tail, _, _) = analyze_transcript_lines(&lines);
+        let (tail, _, _, _) = analyze_transcript_lines(&lines);
         assert_eq!(tail, CursorTailSignal::ToolUseActive);
+    }
+
+    #[test]
+    fn marks_content_stable_after_two_identical_reads() {
+        let path = PathBuf::from("/tmp/agent-light-test.jsonl");
+        assert!(!content_is_stable(&path, 100, 3, CursorTailSignal::AssistantTextOnly));
+        assert!(content_is_stable(&path, 100, 3, CursorTailSignal::AssistantTextOnly));
     }
 }

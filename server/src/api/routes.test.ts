@@ -50,6 +50,67 @@ async function registerDevice(app: Awaited<ReturnType<typeof buildApp>>, accessT
 }
 
 describe("mvp api routes", () => {
+  it("bootstraps a device account without login and reuses the same user on repeat", async () => {
+    const repository = new InMemoryAuthRepository();
+    const app = await buildApp({ env: testEnv, authRepository: repository });
+    const payload = {
+      installation_id: "install-bootstrap-0001",
+      platform: "windows" as const,
+      app_version: "0.1.0",
+      device_label: "Win Desktop",
+    };
+
+    const first = await app.inject({ method: "POST", url: "/api/devices/bootstrap", payload });
+    const second = await app.inject({ method: "POST", url: "/api/devices/bootstrap", payload });
+
+    expect(first.statusCode).toBe(201);
+    expect(first.json().data).toMatchObject({
+      created: true,
+      device: {
+        installation_id: payload.installation_id,
+        platform: payload.platform,
+      },
+      user: {
+        display_name: "Win Desktop",
+        phone_number: null,
+      },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().data.created).toBe(false);
+    expect(second.json().data.user.id).toBe(first.json().data.user.id);
+    expect(second.json().data.device.id).toBe(first.json().data.device.id);
+
+    const usage = await app.inject({
+      method: "POST",
+      url: "/api/usage/codex-thread",
+      headers: { authorization: `Bearer ${first.json().data.access_token}` },
+      payload: {
+        workspace_id: first.json().data.device.workspace_id,
+        device_id: first.json().data.device.id,
+        agent_provider: "cursor",
+        codex_thread_id: "composer-bootstrap",
+        tokens_used: 88,
+        thread_updated_at_ms: 1_780_000_000_000,
+        sampled_at_ms: 1_780_000_000_000,
+      },
+    });
+    const leaderboard = await app.inject({
+      method: "GET",
+      url: "/api/leaderboards/tokens?agent_provider=cursor",
+      headers: { authorization: `Bearer ${first.json().data.access_token}` },
+    });
+
+    expect(usage.statusCode).toBe(200);
+    expect(leaderboard.statusCode).toBe(200);
+    expect(leaderboard.json().data).toMatchObject({
+      agent_provider: "cursor",
+      total_tokens: 88,
+      current_user_rank: 1,
+    });
+
+    await app.close();
+  });
+
   it("registers desktop devices and binds hardware hello payloads", async () => {
     const repository = new InMemoryAuthRepository();
     repository.addInviteCode("INVITE-123");
@@ -129,6 +190,19 @@ describe("mvp api routes", () => {
         thread_updated_at_ms: 1_780_000_000_003,
       },
     });
+    const cursor = await app.inject({
+      method: "POST",
+      url: "/api/usage/codex-thread",
+      headers,
+      payload: {
+        ...usagePayload,
+        agent_provider: "cursor",
+        codex_thread_id: "composer-abc123",
+        model: "composer-2",
+        tokens_used: 420,
+        thread_updated_at_ms: 1_780_000_000_004,
+      },
+    });
 
     expect(first.statusCode).toBe(200);
     expect(first.json().data).toMatchObject({ accepted_tokens_used: 100, ignored_stale_value: false });
@@ -139,6 +213,8 @@ describe("mvp api routes", () => {
     expect(newer.statusCode).toBe(200);
     expect(newer.json().data).toMatchObject({ accepted_tokens_used: 150, ignored_stale_value: false });
     expect(claude.statusCode).toBe(200);
+    expect(cursor.statusCode).toBe(200);
+    expect(cursor.json().data).toMatchObject({ accepted_tokens_used: 420, ignored_stale_value: false });
 
     const leaderboard = await app.inject({
       method: "GET",
@@ -148,6 +224,11 @@ describe("mvp api routes", () => {
     const claudeLeaderboard = await app.inject({
       method: "GET",
       url: `/api/leaderboards/tokens?workspace_id=${device.workspace_id}&agent_provider=claude_code`,
+      headers,
+    });
+    const cursorLeaderboard = await app.inject({
+      method: "GET",
+      url: `/api/leaderboards/tokens?workspace_id=${device.workspace_id}&agent_provider=cursor`,
       headers,
     });
 
@@ -176,6 +257,17 @@ describe("mvp api routes", () => {
     expect(claudeLeaderboard.json().data.entries[0]).toMatchObject({
       user_id: identity.user.id,
       tokens_used: 900,
+      rank: 1,
+    });
+    expect(cursorLeaderboard.statusCode).toBe(200);
+    expect(cursorLeaderboard.json().data).toMatchObject({
+      agent_provider: "cursor",
+      total_tokens: 420,
+      current_user_rank: 1,
+    });
+    expect(cursorLeaderboard.json().data.entries[0]).toMatchObject({
+      user_id: identity.user.id,
+      tokens_used: 420,
       rank: 1,
     });
 

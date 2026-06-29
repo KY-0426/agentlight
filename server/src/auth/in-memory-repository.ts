@@ -3,6 +3,8 @@ import { hashOpaqueValue } from "./crypto";
 import {
   AuthRepositoryError,
   type AuthRepository,
+  type BootstrapDeviceInput,
+  type DeviceBootstrapResult,
   type BindHardwareDeviceInput,
   type CodexThreadUsageResult,
   type ConsumePhoneVerificationCodeInput,
@@ -203,6 +205,20 @@ export class InMemoryAuthRepository implements AuthRepository {
     return this.users.get(userId);
   }
 
+  async updateUserDisplayName(userId: string, displayName: string): Promise<UserRecord> {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new AuthRepositoryError("not_found", "User not found", 404);
+    }
+
+    const updated: UserRecord = {
+      ...user,
+      displayName: displayName.trim(),
+    };
+    this.users.set(userId, updated);
+    return updated;
+  }
+
   async listMemberships(userId: string): Promise<WorkspaceMembershipRecord[]> {
     return this.memberships.get(userId) ?? [];
   }
@@ -227,6 +243,87 @@ export class InMemoryAuthRepository implements AuthRepository {
         token.revokedAt = new Date();
       }
     }
+  }
+
+  async bootstrapDevice(input: BootstrapDeviceInput): Promise<DeviceBootstrapResult> {
+    const existingDeviceId = this.devicesByInstallation.get(input.installationId);
+    if (existingDeviceId) {
+      const existing = this.devices.get(existingDeviceId);
+      if (!existing) {
+        throw new AuthRepositoryError("internal_error", "Device bootstrap failed", 500);
+      }
+
+      const user = this.users.get(existing.userId);
+      if (!user || user.disabledAt) {
+        throw new AuthRepositoryError("unauthorized", "Device owner is unavailable", 401);
+      }
+
+      const updated: DeviceRecord = {
+        ...existing,
+        platform: input.platform,
+        appVersion: input.appVersion,
+        deviceLabel: input.deviceLabel ?? existing.deviceLabel,
+      };
+      this.devices.set(updated.id, updated);
+
+      return {
+        identity: {
+          user,
+          workspaces: this.memberships.get(user.id) ?? [],
+          created: false,
+        },
+        device: updated,
+        created: false,
+      };
+    }
+
+    const now = new Date();
+    const displayName = input.deviceLabel?.trim() || defaultDeviceDisplayName(input.installationId);
+    const user: UserRecord = {
+      id: randomUUID(),
+      email: syntheticDeviceEmail(input.installationId),
+      phoneNumber: null,
+      passwordHash: input.passwordHash,
+      displayName,
+      disabledAt: null,
+      createdAt: now,
+    };
+    const workspace: WorkspaceRecord = {
+      id: randomUUID(),
+      name: `${displayName} Workspace`,
+      createdAt: now,
+    };
+    const membership: WorkspaceMembershipRecord = {
+      workspace,
+      membership: {
+        workspaceId: workspace.id,
+        userId: user.id,
+        role: "owner",
+        joinedAt: now,
+      },
+    };
+    const device: DeviceRecord = {
+      id: randomUUID(),
+      workspaceId: workspace.id,
+      userId: user.id,
+      installationId: input.installationId,
+      platform: input.platform,
+      appVersion: input.appVersion,
+      deviceLabel: input.deviceLabel ?? displayName,
+      createdAt: now,
+    };
+
+    this.users.set(user.id, user);
+    this.usersByEmail.set(user.email, user.id);
+    this.memberships.set(user.id, [membership]);
+    this.devices.set(device.id, device);
+    this.devicesByInstallation.set(device.installationId, device.id);
+
+    return {
+      identity: { user, workspaces: [membership], created: true },
+      device,
+      created: true,
+    };
   }
 
   async upsertDevice(input: UpsertDeviceInput): Promise<DeviceRecord> {
@@ -411,4 +508,13 @@ function toUsageDate(value: number): string {
 function syntheticPhoneEmail(phoneNumber: string): string {
   const normalized = phoneNumber.replace("+", "00");
   return `phone-${normalized}@phone.agent-light.local`;
+}
+
+function syntheticDeviceEmail(installationId: string): string {
+  const normalized = installationId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 64);
+  return `device-${normalized}@device.agent-light.local`;
+}
+
+function defaultDeviceDisplayName(installationId: string): string {
+  return `设备 ${installationId.slice(-4)}`;
 }

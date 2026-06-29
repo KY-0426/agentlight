@@ -31,10 +31,10 @@
       },
       {
         "label": "settings",
-        "title": "Agent Light 设置",
+        "title": "Agent Light 桌宠",
         "url": "index.html?view=settings",
-        "width": 760,
-        "height": 560,
+        "width": 780,
+        "height": 620,
         "resizable": false,
         "fullscreen": false,
         "decorations": true,

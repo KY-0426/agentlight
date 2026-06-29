@@ -24,7 +24,7 @@ describe("AiToolTokenOverview", () => {
       <AiToolTokenOverview tools={[sampleTool]} onManageTools={() => undefined} />,
     );
 
-    expect(html).toContain("AI 工具 Token");
+    expect(html).toContain("AI 助手");
     expect(html).toContain("Codex");
     expect(html).toContain("工作中");
     expect(html).toContain("13K");

@@ -1,14 +1,43 @@
+import { agentProviderValues, type AgentProvider } from "@agent-light/shared";
+
 export const DEFAULT_LEADERBOARD_SERVER_URL = "http://127.0.0.1:8787";
 export const DEFAULT_LEADERBOARD_LIMIT = 20;
 export const DEFAULT_AGENT_PROVIDER: AgentProvider = "codex";
 
-export type AgentProvider = "codex" | "claude_code" | "cursor";
+export type { AgentProvider };
+
+export const agentProviderOrder: AgentProvider[] = [...agentProviderValues];
 
 export const agentProviderLabels: Record<AgentProvider, string> = {
   codex: "Codex",
-  claude_code: "Claude Code",
   cursor: "Cursor",
+  claude_code: "Claude Code",
+  github_copilot: "GitHub Copilot",
+  trae: "Trae",
+  trae_cn: "Trae CN",
+  qoder: "Qoder",
+  qoder_cn: "Qoder CN",
+  codebuddy: "CodeBuddy",
+  antigravity: "Antigravity",
+  kiro: "Kiro",
+  devin: "Devin",
 };
+
+export type LeaderboardTimePeriod = "day" | "week" | "month" | "total";
+
+export const leaderboardTimePeriodOrder: LeaderboardTimePeriod[] = ["day", "week", "month", "total"];
+
+export const leaderboardTimePeriodLabels: Record<LeaderboardTimePeriod, string> = {
+  day: "今日",
+  week: "本周",
+  month: "本月",
+  total: "总计",
+};
+
+export interface LeaderboardDateRange {
+  from?: string;
+  to?: string;
+}
 
 export interface TokenLeaderboardEntry {
   user_id: string;
@@ -32,6 +61,9 @@ export interface TokenLeaderboardRequest {
   agentProvider?: AgentProvider;
   workspaceId?: string;
   limit?: number;
+  timePeriod?: LeaderboardTimePeriod;
+  from?: string;
+  to?: string;
 }
 
 export interface ApiErrorPayload {
@@ -41,6 +73,31 @@ export interface ApiErrorPayload {
     message: string;
     request_id?: string;
   };
+}
+
+export function resolveLeaderboardDateRange(
+  period: LeaderboardTimePeriod,
+  now: Date = new Date(),
+): LeaderboardDateRange {
+  if (period === "total") {
+    return {};
+  }
+
+  const end = startOfLocalDay(now);
+  if (period === "day") {
+    return { from: formatLocalDate(end), to: formatLocalDate(end) };
+  }
+
+  if (period === "week") {
+    const start = new Date(end);
+    const weekday = start.getDay();
+    const diffToMonday = weekday === 0 ? -6 : 1 - weekday;
+    start.setDate(start.getDate() + diffToMonday);
+    return { from: formatLocalDate(start), to: formatLocalDate(end) };
+  }
+
+  const start = new Date(end.getFullYear(), end.getMonth(), 1);
+  return { from: formatLocalDate(start), to: formatLocalDate(end) };
 }
 
 export function normalizeLeaderboardServerUrl(value: string): string {
@@ -79,6 +136,18 @@ export function buildTokenLeaderboardUrl(request: Omit<TokenLeaderboardRequest, 
   }
   url.searchParams.set("agent_provider", request.agentProvider ?? DEFAULT_AGENT_PROVIDER);
   url.searchParams.set("limit", String(normalizeLeaderboardLimit(request.limit)));
+
+  const dateRange =
+    request.from || request.to
+      ? { from: request.from, to: request.to }
+      : resolveLeaderboardDateRange(request.timePeriod ?? "total");
+  if (dateRange.from) {
+    url.searchParams.set("from", toIsoDateStart(dateRange.from));
+  }
+  if (dateRange.to) {
+    url.searchParams.set("to", toIsoDateEnd(dateRange.to));
+  }
+
   return url.toString();
 }
 
@@ -138,10 +207,29 @@ export function getApiErrorMessage(value: unknown): string | null {
   return typeof value.error.message === "string" ? value.error.message : null;
 }
 
+function formatLocalDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function toIsoDateStart(date: string): string {
+  return new Date(`${date}T00:00:00.000`).toISOString();
+}
+
+function toIsoDateEnd(date: string): string {
+  return new Date(`${date}T23:59:59.999`).toISOString();
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isAgentProvider(value: unknown): value is AgentProvider {
-  return value === "codex" || value === "claude_code" || value === "cursor";
+  return typeof value === "string" && agentProviderOrder.includes(value as AgentProvider);
 }
