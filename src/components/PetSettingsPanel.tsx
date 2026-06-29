@@ -23,6 +23,7 @@ import {
   agentProviderLabels,
   agentProviderOrder,
   DEFAULT_LEADERBOARD_SERVER_URL,
+  resolveDefaultCloudServerUrl,
   isDeviceCloudAccount,
   leaderboardTimePeriodLabels,
   leaderboardTimePeriodOrder,
@@ -629,19 +630,17 @@ function AccountPanel({
             <strong>{cloudSyncStatus.state === "error" ? "异常" : "已开启"}</strong>
             <small>{formatSyncDetail(cloudSession, cloudSyncStatus)}</small>
           </article>
+          <article>
+            <span>服务端</span>
+            <strong>{formatServerUrl(cloudSession.server_url)}</strong>
+            <small>更换地址请先断开云端同步，再重新连接</small>
+          </article>
           {IS_DEV_BUILD ? (
-            <>
-              <article>
-                <span>工作空间</span>
-                <strong>{formatWorkspaceId(cloudSession.workspace_id)}</strong>
-                <small>仅开发模式可见</small>
-              </article>
-              <article>
-                <span>服务端</span>
-                <strong>{formatServerUrl(cloudSession.server_url)}</strong>
-                <small>仅开发模式可见</small>
-              </article>
-            </>
+            <article>
+              <span>工作空间</span>
+              <strong>{formatWorkspaceId(cloudSession.workspace_id)}</strong>
+              <small>仅开发模式可见</small>
+            </article>
           ) : null}
           <button
             className="leaderboard-refresh"
@@ -672,7 +671,7 @@ function CloudConnectPanel({
   cloudSyncStatus: CloudSyncStatus;
   onConnectCloud: (serverUrl: string) => Promise<void>;
 }) {
-  const [serverUrl, setServerUrl] = useState(DEFAULT_LEADERBOARD_SERVER_URL);
+  const [serverUrl, setServerUrl] = useState(resolveDefaultCloudServerUrl);
   const [showDevOptions, setShowDevOptions] = useState(false);
   const [connectStatus, setConnectStatus] = useState<"idle" | "submitting" | "error">("idle");
   const [connectError, setConnectError] = useState<string | null>(null);
@@ -700,10 +699,21 @@ function CloudConnectPanel({
           开启后 AI 用量会自动同步，并参与排行榜。桌宠的本地功能无需联网也能正常使用。
         </p>
         <div className="leaderboard-form">
+          <label className="leaderboard-field">
+            <span>服务端地址</span>
+            <input
+              type="url"
+              value={serverUrl}
+              onChange={(event) => setServerUrl(event.target.value)}
+              placeholder={resolveDefaultCloudServerUrl()}
+              autoComplete="url"
+              spellCheck={false}
+            />
+          </label>
           <button
             className="leaderboard-refresh"
             type="button"
-            disabled={isConnecting}
+            disabled={isConnecting || !serverUrl.trim()}
             onClick={() => connectClick.onClick()}
           >
             {isConnecting ? "连接中…" : "开启云端同步"}
@@ -722,15 +732,6 @@ function CloudConnectPanel({
               </button>
               {showDevOptions ? (
                 <>
-                  <label className="leaderboard-field">
-                    <span>服务端地址</span>
-                    <input
-                      type="url"
-                      value={serverUrl}
-                      onChange={(event) => setServerUrl(event.target.value)}
-                      placeholder={DEFAULT_LEADERBOARD_SERVER_URL}
-                    />
-                  </label>
                   <p className="leaderboard-note">本地开发请先启动服务：</p>
                   <pre className="cloud-connect-panel__commands">npm run server:dev</pre>
                   <p className="leaderboard-note">若使用 PostgreSQL，还需：</p>

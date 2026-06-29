@@ -1231,6 +1231,9 @@
   color: var(--sp-text);
   background: var(--sp-surface-raised);
   outline: none;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .leaderboard-field input:focus {

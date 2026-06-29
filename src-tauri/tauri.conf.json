@@ -42,7 +42,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:18765 http://127.0.0.1:8787 http://localhost:8787"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:18765 http://127.0.0.1:8787 http://localhost:8787 https://*.sh.run.tcloudbase.com https://*.tcloudbase.com"
     }
   },
   "bundle": {
