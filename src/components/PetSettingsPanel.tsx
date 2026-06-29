@@ -10,7 +10,6 @@ import type {
   CloudPhoneCodeRequest,
   CloudPhoneCodeResponse,
   CloudSession,
-  CodexStatusSnapshot,
   HardwareStatusSnapshot,
   SettingsPageTarget,
   SystemMetrics,
@@ -18,7 +17,8 @@ import type {
   TokenLeaderboardResponse,
 } from "../tauriClient";
 import { agentStates, defaultPalette, statusDefinitions } from "../domain/status";
-import { agentProviderLabels, DEFAULT_LEADERBOARD_SERVER_URL, listAiToolTokenUsages, listenForSettingsPage } from "../tauriClient";
+import { pickActiveAiToolLabel } from "../domain/agentMonitor";
+import { agentProviderLabels, DEFAULT_LEADERBOARD_SERVER_URL, listenForSettingsPage } from "../tauriClient";
 
 type SettingsPage = SettingsPageTarget;
 type LeaderboardStatus = "idle" | "loading" | "ready" | "error";
@@ -42,8 +42,9 @@ interface PetSettingsPanelProps {
   launchAtLogin: boolean;
   lightSettings: LightSettings;
   systemMetrics: SystemMetrics | null;
-  codexStatus: CodexStatusSnapshot | null;
-  cursorStatus: CodexStatusSnapshot | null;
+  aiToolTokens: AiToolTokenUsage[];
+  aiToolLoading: boolean;
+  onRefreshAiTools: () => Promise<void>;
   hardwareStatus: HardwareStatusSnapshot | null;
   cloudSession: CloudSession | null;
   cloudSyncStatus: CloudSyncStatus;
@@ -72,8 +73,9 @@ export function PetSettingsPanel({
   launchAtLogin,
   lightSettings,
   systemMetrics,
-  codexStatus,
-  cursorStatus,
+  aiToolTokens,
+  aiToolLoading,
+  onRefreshAiTools,
   hardwareStatus,
   cloudSession,
   cloudSyncStatus,
@@ -150,6 +152,7 @@ export function PetSettingsPanel({
   }
 
   const activeNav = NAV_ITEMS.find((item) => item.page === activePage) ?? NAV_ITEMS[0];
+  const activeAiToolLabel = pickActiveAiToolLabel(aiToolTokens);
 
   return (
     <main className={`settings-shell settings-shell--${event.state}`}>
@@ -201,7 +204,7 @@ export function PetSettingsPanel({
               state={event.state}
               stateLabel={currentDefinition.label}
               message={currentMessage}
-              codexLabel={codexStatus ? statusDefinitions[codexStatus.state].label : "检查中"}
+              aiToolLabel={activeAiToolLabel}
               cpuLabel={formatPercent(systemMetrics?.cpu_usage_percent)}
               hardwareLabel={formatHardwareState(hardwareStatus)}
             />
@@ -226,12 +229,12 @@ export function PetSettingsPanel({
               />
             ) : activePage === "device" ? (
               <DevicePanel
-                event={event}
                 alwaysOnTop={alwaysOnTop}
                 launchAtLogin={launchAtLogin}
                 systemMetrics={systemMetrics}
-                codexStatus={codexStatus}
-                cursorStatus={cursorStatus}
+                aiToolTokens={aiToolTokens}
+                aiToolLoading={aiToolLoading}
+                onRefreshAiTools={onRefreshAiTools}
                 logs={logs}
                 onAlwaysOnTopChange={onAlwaysOnTopChange}
                 onLaunchAtLoginChange={onLaunchAtLoginChange}
@@ -270,14 +273,14 @@ function StatusStrip({
   state,
   stateLabel,
   message,
-  codexLabel,
+  aiToolLabel,
   cpuLabel,
   hardwareLabel,
 }: {
   state: AgentState;
   stateLabel: string;
   message: string;
-  codexLabel: string;
+  aiToolLabel: string;
   cpuLabel: string;
   hardwareLabel: string;
 }) {
@@ -297,8 +300,8 @@ function StatusStrip({
       </article>
       <div className="settings-status-strip__metrics">
         <article>
-          <span>Codex</span>
-          <strong>{codexLabel}</strong>
+          <span>AI 工具</span>
+          <strong>{aiToolLabel}</strong>
         </article>
         <article>
           <span>CPU</span>
@@ -602,12 +605,12 @@ function LeaderboardPanel({
 }
 
 interface DevicePanelProps {
-  event: AgentStatusEvent;
   alwaysOnTop: boolean;
   launchAtLogin: boolean;
   systemMetrics: SystemMetrics | null;
-  codexStatus: CodexStatusSnapshot | null;
-  cursorStatus: CodexStatusSnapshot | null;
+  aiToolTokens: AiToolTokenUsage[];
+  aiToolLoading: boolean;
+  onRefreshAiTools: () => Promise<void>;
   logs: AgentStatusEvent[];
   onAlwaysOnTopChange: (enabled: boolean) => void;
   onLaunchAtLoginChange: (enabled: boolean) => void;
@@ -618,54 +621,18 @@ function DevicePanel({
   alwaysOnTop,
   launchAtLogin,
   systemMetrics,
-  codexStatus,
-  cursorStatus,
+  aiToolTokens,
+  aiToolLoading,
+  onRefreshAiTools,
   logs,
   onAlwaysOnTopChange,
   onLaunchAtLoginChange,
   onExitApp,
 }: DevicePanelProps) {
-  const [aiToolTokens, setAiToolTokens] = useState<AiToolTokenUsage[]>([]);
-  const [aiToolLoading, setAiToolLoading] = useState(false);
   const [aiToolModalOpen, setAiToolModalOpen] = useState(false);
   const exitClick = useGuardedClick(onExitApp);
   const manageToolsClick = useGuardedClick(() => setAiToolModalOpen(true), { lockWhileBusy: false });
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function refreshAiToolTokens() {
-      setAiToolLoading(true);
-      try {
-        const items = await listAiToolTokenUsages();
-        if (!cancelled) {
-          setAiToolTokens(items);
-        }
-      } catch {
-        if (!cancelled) {
-          setAiToolTokens([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setAiToolLoading(false);
-        }
-      }
-    }
-
-    void refreshAiToolTokens();
-    const timer = window.setInterval(() => {
-      void refreshAiToolTokens();
-    }, 60_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  const memoryLabel = formatMemory(systemMetrics);
-  const codexStateLabel = codexStatus ? statusDefinitions[codexStatus.state].label : "检查中";
-  const cursorStateLabel = cursorStatus ? statusDefinitions[cursorStatus.state].label : "检查中";
   const cpuLabel = formatPercent(systemMetrics?.cpu_usage_percent);
   const uptimeLabel = formatUptime(systemMetrics?.uptime_seconds);
 
@@ -673,30 +640,10 @@ function DevicePanel({
     <div className="settings-body settings-body--device">
       <section className="settings-section" aria-labelledby="metrics-heading">
         <div className="settings-section__title">
-          <h2 id="metrics-heading">运行概览</h2>
-          <span className="settings-badge">5 秒刷新</span>
+          <h2 id="metrics-heading">系统资源</h2>
+          <span className="settings-badge">10 秒刷新</span>
         </div>
         <div className="settings-metric-grid">
-          <article className="settings-metric">
-            <span>Codex 额度</span>
-            <strong>{codexStatus?.quota_label ?? "检查中"}</strong>
-            <small>{codexStatus?.quota_detail ?? "正在读取 Codex 本地状态"}</small>
-          </article>
-          <article className="settings-metric">
-            <span>Codex 状态</span>
-            <strong>{codexStateLabel}</strong>
-            <small>{formatCodexActivity(codexStatus)}</small>
-          </article>
-          <article className="settings-metric">
-            <span>Codex 已用</span>
-            <strong>{formatTokens(codexStatus?.tokens_used)}</strong>
-            <small>{formatCodexModel(codexStatus)}</small>
-          </article>
-          <article className="settings-metric">
-            <span>Codex 登录</span>
-            <strong>{codexStatus?.logged_in ? "已登录" : "未登录"}</strong>
-            <small>{codexStatus?.login_label ?? "等待 Codex CLI"}</small>
-          </article>
           <article className="settings-metric">
             <span>CPU</span>
             <strong>{cpuLabel}</strong>
@@ -705,32 +652,12 @@ function DevicePanel({
           <article className="settings-metric">
             <span>内存</span>
             <strong>{formatPercent(systemMetrics?.memory_used_percent)}</strong>
-            <small>{memoryLabel}</small>
+            <small>{formatMemory(systemMetrics)}</small>
           </article>
           <article className="settings-metric">
             <span>开机时长</span>
             <strong>{uptimeLabel}</strong>
-            <small>{systemMetrics ? "每 5 秒刷新" : "等待系统数据"}</small>
-          </article>
-          <article className="settings-metric settings-metric--wide">
-            <span>最近 Codex 线程</span>
-            <strong>{formatCodexThread(codexStatus)}</strong>
-            <small>{formatCodexCwd(codexStatus)}</small>
-          </article>
-          <article className="settings-metric">
-            <span>Cursor 状态</span>
-            <strong>{cursorStateLabel}</strong>
-            <small>{formatCodexActivity(cursorStatus)}</small>
-          </article>
-          <article className="settings-metric">
-            <span>Cursor 估算 Token</span>
-            <strong>{formatTokens(cursorStatus?.tokens_used)}</strong>
-            <small>{cursorStatus?.quota_detail ?? "读取 ~/.cursor/projects/*/agent-transcripts"}</small>
-          </article>
-          <article className="settings-metric settings-metric--wide">
-            <span>Cursor Composer</span>
-            <strong>{formatCodexThread(cursorStatus)}</strong>
-            <small>{cursorStatus?.login_label ?? "等待 Cursor 会话"}</small>
+            <small>{systemMetrics ? "每 10 秒刷新" : "等待系统数据"}</small>
           </article>
         </div>
       </section>
@@ -738,6 +665,7 @@ function DevicePanel({
       <AiToolTokenOverview
         tools={aiToolTokens}
         loading={aiToolLoading}
+        refreshIntervalSec={5}
         onManageTools={() => manageToolsClick.onClick()}
         manageToolsBusy={manageToolsClick.busy}
       />
@@ -745,11 +673,7 @@ function DevicePanel({
       <AiToolConnectModal
         open={aiToolModalOpen}
         onClose={() => setAiToolModalOpen(false)}
-        onToolsChanged={() => {
-          void listAiToolTokenUsages()
-            .then(setAiToolTokens)
-            .catch(() => setAiToolTokens([]));
-        }}
+        onToolsChanged={() => void onRefreshAiTools()}
       />
 
       <div className="settings-split">
@@ -1088,23 +1012,6 @@ function formatSyncDetail(session: CloudSession, status: CloudSyncStatus): strin
   return `${session.server_url} / ${formatWorkspaceId(session.workspace_id)}`;
 }
 
-function formatCodexActivity(snapshot: CodexStatusSnapshot | null): string {
-  if (!snapshot) {
-    return "等待 Codex 数据";
-  }
-  if (typeof snapshot.active_age_seconds !== "number") {
-    return snapshot.available ? "暂无最近线程" : "未检测到 Codex 数据";
-  }
-  if (snapshot.active_age_seconds < 60) {
-    return `${snapshot.active_age_seconds} 秒前更新`;
-  }
-  return `${Math.floor(snapshot.active_age_seconds / 60)} 分钟前更新`;
-}
-
-function formatCodexModel(snapshot: CodexStatusSnapshot | null): string {
-  return snapshot?.latest_model ? `模型 ${snapshot.latest_model}` : "暂无模型记录";
-}
-
 function formatHardwareState(snapshot: HardwareStatusSnapshot | null): string {
   if (!snapshot) {
     return "检查中";
@@ -1167,19 +1074,4 @@ function formatHardwareTroubleshooting(snapshot: HardwareStatusSnapshot | null) 
         ];
 
   return { summary, portsLabel, envHint, steps };
-}
-
-function formatCodexThread(snapshot: CodexStatusSnapshot | null): string {
-  if (!snapshot?.latest_thread_id) {
-    return "--";
-  }
-  return snapshot.latest_thread_id.slice(0, 8);
-}
-
-function formatCodexCwd(snapshot: CodexStatusSnapshot | null): string {
-  if (!snapshot?.latest_cwd) {
-    return "暂无工作目录";
-  }
-  const parts = snapshot.latest_cwd.split("/").filter(Boolean);
-  return parts.length > 0 ? parts[parts.length - 1] : snapshot.latest_cwd;
 }

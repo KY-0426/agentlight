@@ -4,11 +4,18 @@ import { aiToolAccent, aiToolInitials } from "../domain/aiTools";
 interface AiToolTokenOverviewProps {
   tools: AiToolTokenUsage[];
   loading?: boolean;
+  refreshIntervalSec?: number;
   onManageTools?: () => void;
   manageToolsBusy?: boolean;
 }
 
-export function AiToolTokenOverview({ tools, loading, onManageTools, manageToolsBusy = false }: AiToolTokenOverviewProps) {
+export function AiToolTokenOverview({
+  tools,
+  loading,
+  refreshIntervalSec = 5,
+  onManageTools,
+  manageToolsBusy = false,
+}: AiToolTokenOverviewProps) {
   const trackedTotal = tools.reduce((sum, tool) => sum + (tool.tokens_used ?? 0), 0);
   const trackedCount = tools.filter((tool) => typeof tool.tokens_used === "number").length;
 
@@ -32,7 +39,7 @@ export function AiToolTokenOverview({ tools, loading, onManageTools, manageTools
               接入 AI 工具
             </button>
           ) : null}
-          <span className="settings-badge">20 秒刷新</span>
+          <span className="settings-badge">{refreshIntervalSec} 秒刷新</span>
         </div>
       </div>
 

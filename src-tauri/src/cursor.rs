@@ -5,7 +5,7 @@
 //!
 //! Token 口径：Cursor 未公开本地 token 字段，当前按 transcript 中 assistant 文本长度 / 4 估算。
 
-use crate::{AgentStatus, CodexStatusSnapshot, CodexThreadActivity};
+use crate::{AgentStatus, CodexStatusSnapshot};
 use serde_json::Value;
 use std::fs;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
@@ -13,17 +13,43 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
-const CURSOR_ACTIVE_WINDOW_SECONDS: u64 = 12;
+const CURSOR_STREAMING_GRACE_SECONDS: u64 = 2;
+const CURSOR_USER_PENDING_SECONDS: u64 = 180;
 const CURSOR_COMPLETED_WINDOW_SECONDS: u64 = 5 * 60;
-const CURSOR_STATUS_CACHE_TTL_MS: u128 = 4_000;
+const CURSOR_STATUS_CACHE_TTL_MS: u128 = 1_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CursorTailSignal {
+    ToolUseActive,
+    AssistantTextOnly,
+    UserWaiting,
+    None,
+}
 
 #[derive(Debug, Clone)]
 struct CursorTranscript {
     composer_id: String,
     updated_at_ms: u128,
-    activity: CodexThreadActivity,
+    tail_signal: CursorTailSignal,
     tokens_used: u64,
     model: Option<String>,
+}
+
+fn resolve_cursor_state(tail: CursorTailSignal, age_seconds: Option<u64>) -> AgentStatus {
+    let age = age_seconds.unwrap_or(u64::MAX);
+    let is_streaming = age <= CURSOR_STREAMING_GRACE_SECONDS;
+    let is_user_pending = age <= CURSOR_USER_PENDING_SECONDS;
+    let is_recent_completed = age <= CURSOR_COMPLETED_WINDOW_SECONDS;
+
+    match tail {
+        CursorTailSignal::ToolUseActive => AgentStatus::Working,
+        CursorTailSignal::AssistantTextOnly if is_streaming => AgentStatus::Working,
+        CursorTailSignal::AssistantTextOnly if is_recent_completed => AgentStatus::Completed,
+        CursorTailSignal::AssistantTextOnly => AgentStatus::Standby,
+        CursorTailSignal::UserWaiting if is_user_pending => AgentStatus::Working,
+        CursorTailSignal::UserWaiting => AgentStatus::Standby,
+        CursorTailSignal::None => AgentStatus::Standby,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -137,22 +163,7 @@ fn build_cursor_status(
                 .saturating_sub(transcript.updated_at_ms)
                 .checked_div(1000)
                 .and_then(|seconds| u64::try_from(seconds).ok());
-            let is_recent =
-                active_age_seconds.is_some_and(|seconds| seconds <= CURSOR_ACTIVE_WINDOW_SECONDS);
-            let is_recent_completed = active_age_seconds
-                .is_some_and(|seconds| seconds <= CURSOR_COMPLETED_WINDOW_SECONDS);
-            let state = if transcript.activity == CodexThreadActivity::Active
-                && active_age_seconds.is_some_and(|seconds| seconds <= 15 * 60)
-            {
-                AgentStatus::Working
-            } else if transcript.activity == CodexThreadActivity::Completed && is_recent_completed
-            {
-                AgentStatus::Completed
-            } else if is_recent {
-                AgentStatus::Working
-            } else {
-                AgentStatus::Standby
-            };
+            let state = resolve_cursor_state(transcript.tail_signal, active_age_seconds);
             let is_working = state == AgentStatus::Working;
 
             (
@@ -258,54 +269,77 @@ fn parse_transcript(path: &Path, composer_id: &str, updated_at_ms: u128) -> Opti
         }
     }
 
-    let (activity, tokens_used, model) = analyze_transcript_lines(&lines);
+    let (tail_signal, tokens_used, model) = analyze_transcript_lines(&lines);
     Some(CursorTranscript {
         composer_id: composer_id.to_string(),
         updated_at_ms,
-        activity,
+        tail_signal,
         tokens_used,
         model,
     })
 }
 
-fn analyze_transcript_lines(lines: &[String]) -> (CodexThreadActivity, u64, Option<String>) {
+fn analyze_transcript_lines(lines: &[String]) -> (CursorTailSignal, u64, Option<String>) {
     let mut tokens_used = 0u64;
     let mut model = None;
-    let mut saw_tool_use = false;
-    let mut saw_turn_ended = false;
 
     for line in lines {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
 
-        if value.get("type").and_then(Value::as_str) == Some("turn_ended") {
-            saw_turn_ended = true;
-            continue;
-        }
-
         if value.get("role").and_then(Value::as_str) == Some("assistant") {
             tokens_used = tokens_used.saturating_add(estimate_tokens_from_message(&value));
-            if message_has_tool_use(&value) {
-                saw_tool_use = true;
-            }
             if let Some(model_name) = value.get("model").and_then(Value::as_str) {
                 model = Some(model_name.to_string());
             }
         }
     }
 
-    let activity = if saw_tool_use && !saw_turn_ended {
-        CodexThreadActivity::Active
-    } else if saw_turn_ended {
-        CodexThreadActivity::Completed
-    } else if tokens_used > 0 {
-        CodexThreadActivity::Unknown
-    } else {
-        CodexThreadActivity::Unknown
-    };
+    (classify_cursor_tail(lines), tokens_used, model)
+}
 
-    (activity, tokens_used, model)
+fn classify_cursor_tail(lines: &[String]) -> CursorTailSignal {
+    for line in lines.iter().rev() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+
+        if value.get("type").and_then(Value::as_str) == Some("turn_ended") {
+            return CursorTailSignal::AssistantTextOnly;
+        }
+
+        match value.get("role").and_then(Value::as_str) {
+            Some("assistant") => {
+                if message_has_tool_use(&value) {
+                    return CursorTailSignal::ToolUseActive;
+                }
+                if assistant_has_content(&value) {
+                    return CursorTailSignal::AssistantTextOnly;
+                }
+            }
+            Some("user") => return CursorTailSignal::UserWaiting,
+            _ => {}
+        }
+    }
+
+    CursorTailSignal::None
+}
+
+fn assistant_has_content(value: &Value) -> bool {
+    value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.get("type").and_then(Value::as_str) == Some("text")
+                    && item
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.is_empty())
+            })
+        })
 }
 
 fn message_has_tool_use(value: &Value) -> bool {
@@ -342,38 +376,116 @@ fn estimate_tokens_from_message(value: &Value) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::classify_codex_thread_activity;
 
     #[test]
-    fn classifies_active_transcript_with_tool_use() {
+    fn classifies_active_transcript_when_last_assistant_uses_tools() {
         let lines = vec![
             r#"{"role":"user","message":{"content":[{"type":"text","text":"hi"}]}}"#.to_string(),
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"working"}]}}"#
+                .to_string(),
             r#"{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}"#
                 .to_string(),
         ];
-        let (activity, tokens, _) = analyze_transcript_lines(&lines);
-        assert_eq!(activity, CodexThreadActivity::Active);
-        assert_eq!(tokens, 0);
-    }
-
-    #[test]
-    fn classifies_completed_transcript_after_turn_ended() {
-        let lines = vec![
-            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"done"}]}}"#
-                .to_string(),
-            r#"{"type":"turn_ended","status":"success"}"#.to_string(),
-        ];
-        let (activity, tokens, _) = analyze_transcript_lines(&lines);
-        assert_eq!(activity, CodexThreadActivity::Completed);
+        let (tail, tokens, _) = analyze_transcript_lines(&lines);
+        assert_eq!(tail, CursorTailSignal::ToolUseActive);
         assert_eq!(tokens, 1);
     }
 
     #[test]
-    fn reuses_codex_tail_classifier_for_rollout_like_text() {
-        let tail = r#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command"}}"#;
+    fn classifies_completed_transcript_when_final_assistant_is_text_only() {
+        let lines = vec![
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"hi"}]}}"#.to_string(),
+            r#"{"role":"assistant","message":{"content":[{"type":"tool_use","name":"Read"}]}}"#
+                .to_string(),
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"done"}]}}"#
+                .to_string(),
+        ];
+        let (tail, tokens, _) = analyze_transcript_lines(&lines);
+        assert_eq!(tail, CursorTailSignal::AssistantTextOnly);
+        assert_eq!(tokens, 1);
+    }
+
+    #[test]
+    fn classifies_user_waiting_when_last_line_is_user() {
+        let lines = vec![
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"done"}]}}"#
+                .to_string(),
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"next"}]}}"#.to_string(),
+        ];
+        let (tail, _, _) = analyze_transcript_lines(&lines);
+        assert_eq!(tail, CursorTailSignal::UserWaiting);
+    }
+
+    #[test]
+    fn resolves_completed_after_stale_final_assistant_reply() {
         assert_eq!(
-            classify_codex_thread_activity(tail),
-            CodexThreadActivity::Active
+            resolve_cursor_state(CursorTailSignal::AssistantTextOnly, Some(3)),
+            AgentStatus::Completed
         );
+    }
+
+    #[test]
+    fn resolves_working_while_final_assistant_reply_is_still_streaming() {
+        assert_eq!(
+            resolve_cursor_state(CursorTailSignal::AssistantTextOnly, Some(1)),
+            AgentStatus::Working
+        );
+    }
+
+    #[test]
+    fn resolves_standby_after_completed_window() {
+        assert_eq!(
+            resolve_cursor_state(CursorTailSignal::AssistantTextOnly, Some(400)),
+            AgentStatus::Standby
+        );
+    }
+
+    #[test]
+    fn classifies_realistic_cursor_turn_with_text_then_tools_then_final_text() {
+        let lines = vec![
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\n怎么退出  状态测试\n</user_query>"}]}}"#
+                .to_string(),
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"thinking"},{"type":"tool_use","name":"Grep"}]}}"#
+                .to_string(),
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"**结论**：退出状态测试..."}]}}"#
+                .to_string(),
+        ];
+        let (tail, _, _) = analyze_transcript_lines(&lines);
+        assert_eq!(tail, CursorTailSignal::AssistantTextOnly);
+        assert_eq!(
+            resolve_cursor_state(tail, Some(3)),
+            AgentStatus::Completed
+        );
+    }
+
+    #[test]
+    fn classifies_active_session_when_user_just_sent_follow_up() {
+        let lines = vec![
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"previous answer"}]}}"#
+                .to_string(),
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\n检查一下对吗？\n</user_query>"}]}}"#
+                .to_string(),
+        ];
+        let (tail, _, _) = analyze_transcript_lines(&lines);
+        assert_eq!(tail, CursorTailSignal::UserWaiting);
+        assert_eq!(
+            resolve_cursor_state(tail, Some(5)),
+            AgentStatus::Working
+        );
+        assert_eq!(
+            resolve_cursor_state(tail, Some(200)),
+            AgentStatus::Standby
+        );
+    }
+
+    #[test]
+    fn classifies_mid_turn_assistant_line_with_text_and_tools_as_active() {
+        let lines = vec![
+            r#"{"role":"user","message":{"content":[{"type":"text","text":"go"}]}}"#.to_string(),
+            r#"{"role":"assistant","message":{"content":[{"type":"text","text":"checking"},{"type":"tool_use","name":"Read"}]}}"#
+                .to_string(),
+        ];
+        let (tail, _, _) = analyze_transcript_lines(&lines);
+        assert_eq!(tail, CursorTailSignal::ToolUseActive);
     }
 }

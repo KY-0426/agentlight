@@ -3,6 +3,8 @@ import { AgentPet } from "./components/AgentPet";
 import { HardwareDebugPanel } from "./components/HardwareDebugPanel";
 import { PetSettingsPanel } from "./components/PetSettingsPanel";
 import { useGuardedClick } from "./hooks/useGuardedClick";
+import { pickPrimaryAgentMonitor } from "./domain/agentMonitor";
+import type { AiToolTokenUsage } from "./domain/aiTools";
 import {
   type AgentState,
   type AgentStatusEvent,
@@ -15,6 +17,7 @@ import {
 import {
   getCodexStatus,
   getCursorStatus,
+  listAiToolTokenUsages,
   getHardwareStatus,
   probeHardware,
   getTokenLeaderboard,
@@ -55,6 +58,8 @@ import {
 const STORAGE_KEY = "agent-light-config-v1";
 const FIXED_MOTION_SPEED = 760;
 const MANUAL_STATUS_HOLD_MS = 60_000;
+const AGENT_STATUS_REFRESH_MS = 2_000;
+const SYSTEM_METRICS_REFRESH_MS = 10_000;
 
 interface StoredConfig {
   alwaysOnTop: boolean;
@@ -111,6 +116,8 @@ export default function App() {
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [codexStatus, setCodexStatus] = useState<CodexStatusSnapshot | null>(null);
   const [cursorStatus, setCursorStatus] = useState<CodexStatusSnapshot | null>(null);
+  const [aiToolTokens, setAiToolTokens] = useState<AiToolTokenUsage[]>([]);
+  const [aiToolLoading, setAiToolLoading] = useState(false);
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatusSnapshot | null>(null);
   const [cloudSession, setCloudSession] = useState<CloudSession | null>(null);
   const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>({
@@ -192,11 +199,11 @@ export default function App() {
       void refreshSystemMetrics();
       metricsTimer = window.setInterval(() => {
         void refreshSystemMetrics();
-      }, 10_000);
+      }, SYSTEM_METRICS_REFRESH_MS);
       void refreshAgentStatuses();
       agentStatusTimer = window.setInterval(() => {
         void refreshAgentStatuses();
-      }, 10_000);
+      }, AGENT_STATUS_REFRESH_MS);
       void refreshHardwareStatus();
       hardwareTimer = window.setInterval(() => {
         void refreshHardwareStatus();
@@ -226,7 +233,16 @@ export default function App() {
         .catch(() => pushEvent(createStatusEvent("standby", "预览模式", "fallback"), label));
 
       let unlisten: (() => void) | null = null;
-      listenForStatus((snapshot) => pushEvent(snapshot, label))
+      listenForStatus((snapshot) => {
+        pushEvent(snapshot, label);
+        if (
+          snapshot.source === "local_api" ||
+          snapshot.source === "codex_monitor" ||
+          snapshot.source === "cursor_monitor"
+        ) {
+          void refreshAiToolTokensOnly();
+        }
+      })
         .then((unsubscribe) => {
           unlisten = unsubscribe;
         })
@@ -255,7 +271,7 @@ export default function App() {
         void refreshAgentStatuses();
         agentStatusTimer = window.setInterval(() => {
           void refreshAgentStatuses();
-        }, 8_000);
+        }, AGENT_STATUS_REFRESH_MS);
       } else {
         startSettingsTimers();
         const onVisibilityChange = () => {
@@ -393,13 +409,25 @@ export default function App() {
     }
   }
 
+  async function refreshAiToolTokensOnly() {
+    try {
+      setAiToolTokens(await listAiToolTokenUsages());
+    } catch {
+      setAiToolTokens([]);
+    }
+  }
+
   async function refreshAgentStatuses() {
-    const [codexSnapshot, cursorSnapshot] = await Promise.all([
+    setAiToolLoading(true);
+    const [codexSnapshot, cursorSnapshot, aiToolsSnapshot] = await Promise.all([
       getCodexStatus().catch(() => null),
       getCursorStatus().catch(() => null),
+      listAiToolTokenUsages().catch(() => [] as AiToolTokenUsage[]),
     ]);
     setCodexStatus(codexSnapshot);
     setCursorStatus(cursorSnapshot);
+    setAiToolTokens(aiToolsSnapshot);
+    setAiToolLoading(false);
     if (codexSnapshot) {
       void syncAgentUsage(codexSnapshot, "codex");
     }
@@ -563,11 +591,7 @@ export default function App() {
       return;
     }
 
-    const primary = cursorSnapshot?.available
-      ? { snapshot: cursorSnapshot, label: "Cursor", source: "cursor_monitor" as const }
-      : codexSnapshot?.available
-        ? { snapshot: codexSnapshot, label: "Codex", source: "codex_monitor" as const }
-        : null;
+    const primary = pickPrimaryAgentMonitor(cursorSnapshot, codexSnapshot);
 
     if (!primary) {
       await syncAgentState("attention", "Cursor / Codex 均不可用", "cursor_monitor");
@@ -637,8 +661,9 @@ export default function App() {
         launchAtLogin={config.launchAtLogin}
         lightSettings={config.lightSettings}
         systemMetrics={systemMetrics}
-        codexStatus={codexStatus}
-        cursorStatus={cursorStatus}
+        aiToolTokens={aiToolTokens}
+        aiToolLoading={aiToolLoading}
+        onRefreshAiTools={() => refreshAgentStatuses()}
         hardwareStatus={hardwareStatus}
         cloudSession={cloudSession}
         cloudSyncStatus={cloudSyncStatus}
