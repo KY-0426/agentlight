@@ -1,0 +1,17 @@
+[package]
+name = "agent-light"
+version = "0.1.0"
+description = "AI agent status light desktop MVP"
+authors = ["Agent Light"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
+ureq = { version = "2", features = ["json"] }
+serialport = "4.7"
