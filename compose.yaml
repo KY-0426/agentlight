@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agent_light
+      POSTGRES_USER: agent_light
+      POSTGRES_PASSWORD: agent_light
+    ports:
+      - "5432:5432"
+    volumes:
+      - agent_light_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent_light -d agent_light"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  server:
+    profiles: ["prod"]
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    env_file:
+      - ./server/.env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8787
+      DATABASE_URL: postgresql://agent_light:agent_light@postgres:5432/agent_light
+    ports:
+      - "8787:8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  agent_light_pgdata:

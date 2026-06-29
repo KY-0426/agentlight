@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+server/dist/
+target/
+src-tauri/target/
+releases/
+
+# Environment
+.env
+.env.*
+!*.env.example
+
+# Logs & temp
+*.log
+npm-debug.log*
+node_modules/.tmp/
+
+# OS junk
+.DS_Store
+._*
+**/._*
+Thumbs.db
+Desktop.ini
+
+# IDE (local only)
+.idea/
+*.swp
+*.swo
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# Local agent rules (machine-specific)
+AGENTS.md
