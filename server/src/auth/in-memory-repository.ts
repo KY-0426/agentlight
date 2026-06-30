@@ -24,6 +24,13 @@ import {
   type UserRecord,
   type WorkspaceMembershipRecord,
   type WorkspaceRecord,
+  type ActivateClientInput,
+  type ActivateClientResult,
+  type ActivationCodeRecord,
+  type CreateActivationCodesInput,
+  type CreateActivationCodesResult,
+  type ListActivationCodesInput,
+  type ListActivationCodesResult,
 } from "./repository";
 
 type InviteRecord = {
@@ -44,8 +51,14 @@ type PhoneVerificationRecord = {
   createdAt: Date;
 };
 
+type InMemoryActivationCodeRecord = ActivationCodeRecord & {
+  codeHash: string;
+};
+
 export class InMemoryAuthRepository implements AuthRepository {
   private readonly invites = new Map<string, InviteRecord>();
+  private readonly activationCodes = new Map<string, InMemoryActivationCodeRecord>();
+  private readonly activationCodesByHash = new Map<string, string>();
   private readonly users = new Map<string, UserRecord>();
   private readonly usersByEmail = new Map<string, string>();
   private readonly usersByPhone = new Map<string, string>();
@@ -70,6 +83,25 @@ export class InMemoryAuthRepository implements AuthRepository {
       expiresAt,
       usedByUserId: null,
     });
+  }
+
+  addActivationCode(code: string, expiresAt: Date | null = null, label: string | null = null): void {
+    const now = new Date();
+    const codeHash = hashOpaqueValue(code);
+    const record: InMemoryActivationCodeRecord = {
+      id: randomUUID(),
+      codeHash,
+      status: "active",
+      label,
+      expiresAt,
+      usedAt: null,
+      activatedInstallationId: null,
+      activatedPlatform: null,
+      activatedAppVersion: null,
+      createdAt: now,
+    };
+    this.activationCodes.set(record.id, record);
+    this.activationCodesByHash.set(codeHash, record.id);
   }
 
   async registerWithInvite(input: RegisterWithInviteInput): Promise<RegisteredIdentity> {
@@ -494,6 +526,93 @@ export class InMemoryAuthRepository implements AuthRepository {
     const entries = await this.getTokenLeaderboard({ ...input, limit: Number.MAX_SAFE_INTEGER });
     const entry = entries.find((item) => item.userId === input.userId);
     return entry?.rank ?? null;
+  }
+
+  async activateClient(input: ActivateClientInput): Promise<ActivateClientResult> {
+    for (const record of this.activationCodes.values()) {
+      if (record.status === "used" && record.activatedInstallationId === input.installationId) {
+        return {
+          activationId: record.id,
+          installationId: input.installationId,
+          activatedAt: record.usedAt ?? new Date(),
+        };
+      }
+    }
+
+    const codeId = this.activationCodesByHash.get(input.activationCodeHash);
+    const code = codeId ? this.activationCodes.get(codeId) : undefined;
+    if (!code || code.status !== "active" || (code.expiresAt && code.expiresAt <= new Date())) {
+      if (!code) {
+        throw new AuthRepositoryError("activation_code_invalid", "Activation code is invalid", 400);
+      }
+      if (code.status === "revoked") {
+        throw new AuthRepositoryError("activation_code_revoked", "Activation code has been revoked", 400);
+      }
+      if (code.status === "used") {
+        throw new AuthRepositoryError("activation_code_used", "Activation code has already been used", 400);
+      }
+      if (code.expiresAt && code.expiresAt <= new Date()) {
+        throw new AuthRepositoryError("activation_code_expired", "Activation code has expired", 400);
+      }
+      throw new AuthRepositoryError("activation_code_invalid", "Activation code is invalid", 400);
+    }
+
+    const now = new Date();
+    code.status = "used";
+    code.usedAt = now;
+    code.activatedInstallationId = input.installationId;
+    code.activatedPlatform = input.platform;
+    code.activatedAppVersion = input.appVersion;
+
+    return {
+      activationId: code.id,
+      installationId: input.installationId,
+      activatedAt: now,
+    };
+  }
+
+  async createActivationCodes(input: CreateActivationCodesInput): Promise<CreateActivationCodesResult> {
+    const codes: Array<{ id: string; code: string }> = [];
+    for (let index = 0; index < input.count; index += 1) {
+      const plaintext = `AL-${randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase()}`;
+      const codeHash = hashOpaqueValue(plaintext);
+      const now = new Date();
+      const record: InMemoryActivationCodeRecord = {
+        id: randomUUID(),
+        codeHash,
+        status: "active",
+        label: input.label,
+        expiresAt: input.expiresAt,
+        usedAt: null,
+        activatedInstallationId: null,
+        activatedPlatform: null,
+        activatedAppVersion: null,
+        createdAt: now,
+      };
+      this.activationCodes.set(record.id, record);
+      this.activationCodesByHash.set(codeHash, record.id);
+      codes.push({ id: record.id, code: plaintext });
+    }
+    return { codes };
+  }
+
+  async listActivationCodes(input: ListActivationCodesInput): Promise<ListActivationCodesResult> {
+    const items = [...this.activationCodes.values()]
+      .filter((record) => !input.status || record.status === input.status)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+
+    return {
+      items: items.slice(input.offset, input.offset + input.limit).map(({ codeHash: _codeHash, ...record }) => record),
+      total: items.length,
+    };
+  }
+
+  async revokeActivationCode(id: string): Promise<void> {
+    const record = this.activationCodes.get(id);
+    if (!record || record.status !== "active") {
+      throw new AuthRepositoryError("not_found", "Activation code not found or not revocable", 404);
+    }
+    record.status = "revoked";
   }
 }
 

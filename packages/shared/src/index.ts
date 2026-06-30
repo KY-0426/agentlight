@@ -41,6 +41,12 @@ export const isoDateStringSchema = z.iso.datetime({ offset: true });
 export const emailSchema = z.email().max(254);
 export const passwordSchema = z.string().min(12).max(128);
 export const inviteCodeSchema = z.string().trim().min(6).max(64).regex(/^[A-Za-z0-9_-]+$/);
+export const activationCodeSchema = inviteCodeSchema;
+export type ActivationCode = z.infer<typeof activationCodeSchema>;
+
+export const activationCodeStatusValues = ["active", "used", "revoked"] as const;
+export const activationCodeStatusSchema = z.enum(activationCodeStatusValues);
+export type ActivationCodeStatus = z.infer<typeof activationCodeStatusSchema>;
 export const phoneNumberSchema = z.string().trim().min(8).max(16).regex(/^\+?[1-9]\d{7,14}$/);
 export const phoneVerificationCodeSchema = z.string().trim().regex(/^\d{6}$/);
 
@@ -201,6 +207,66 @@ export const deviceBootstrapResponseSchema = authSessionResponseSchema.extend({
 });
 export type DeviceBootstrapResponse = z.infer<typeof deviceBootstrapResponseSchema>;
 
+export const activateClientRequestSchema = z.object({
+  activation_code: activationCodeSchema,
+  installation_id: z.string().trim().min(12).max(128),
+  platform: desktopPlatformSchema,
+  app_version: z.string().trim().min(1).max(40),
+}).strict();
+export type ActivateClientRequest = z.infer<typeof activateClientRequestSchema>;
+
+export const activateClientResponseSchema = z.object({
+  activation_id: uuidSchema,
+  installation_id: z.string().min(12).max(128),
+  activated_at: isoDateStringSchema,
+  receipt: z.string().min(16).max(512),
+});
+export type ActivateClientResponse = z.infer<typeof activateClientResponseSchema>;
+
+export const createActivationCodesRequestSchema = z.object({
+  count: z.number().int().min(1).max(100).default(1),
+  expires_in_days: z.number().int().min(1).max(3650).optional(),
+  label: z.string().trim().min(1).max(200).optional(),
+}).strict();
+export type CreateActivationCodesRequest = z.infer<typeof createActivationCodesRequestSchema>;
+
+export const activationCodeDtoSchema = z.object({
+  id: uuidSchema,
+  status: activationCodeStatusSchema,
+  label: z.string().max(200).nullable(),
+  expires_at: isoDateStringSchema.nullable(),
+  used_at: isoDateStringSchema.nullable(),
+  activated_installation_id: z.string().min(12).max(128).nullable(),
+  activated_platform: desktopPlatformSchema.nullable(),
+  activated_app_version: z.string().min(1).max(40).nullable(),
+  created_at: isoDateStringSchema,
+});
+export type ActivationCodeDto = z.infer<typeof activationCodeDtoSchema>;
+
+export const createActivationCodeItemSchema = z.object({
+  id: uuidSchema,
+  code: activationCodeSchema,
+});
+export type CreateActivationCodeItem = z.infer<typeof createActivationCodeItemSchema>;
+
+export const createActivationCodesResponseSchema = z.object({
+  codes: z.array(createActivationCodeItemSchema).min(1).max(100),
+});
+export type CreateActivationCodesResponse = z.infer<typeof createActivationCodesResponseSchema>;
+
+export const listActivationCodesQuerySchema = z.object({
+  status: activationCodeStatusSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type ListActivationCodesQuery = z.infer<typeof listActivationCodesQuerySchema>;
+
+export const listActivationCodesResponseSchema = z.object({
+  items: z.array(activationCodeDtoSchema),
+  total: z.number().int().nonnegative(),
+});
+export type ListActivationCodesResponse = z.infer<typeof listActivationCodesResponseSchema>;
+
 export const hardwareHelloSchema = z.object({
   hardware_device_id: z.string().trim().min(8).max(128),
   firmware_version: z.string().trim().min(1).max(40),
@@ -282,6 +348,13 @@ export const apiErrorCodeValues = [
   "conflict",
   "invite_code_invalid",
   "invite_code_used",
+  "activation_code_invalid",
+  "activation_code_used",
+  "activation_code_revoked",
+  "activation_code_expired",
+  "activation_code_required",
+  "admin_unauthorized",
+  "client_not_activated",
   "verification_code_invalid",
   "verification_code_expired",
   "stale_usage_ignored",

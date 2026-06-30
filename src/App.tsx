@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AgentPet } from "./components/AgentPet";
+import { ActivationScreen } from "./components/ActivationScreen";
 import { HardwareDebugPanel } from "./components/HardwareDebugPanel";
 import { PetSettingsPanel } from "./components/PetSettingsPanel";
 import { useGuardedClick } from "./hooks/useGuardedClick";
@@ -22,6 +23,7 @@ import {
   getTokenLeaderboard,
   getSystemMetrics,
   getStatus,
+  getActivationStatus,
   getWindowLabel,
   getMainWindowPlacement,
   isTauriRuntime,
@@ -112,6 +114,9 @@ function cloudSessionMessage(session: CloudSession): string {
 }
 
 export default function App() {
+  const [clientActivated, setClientActivated] = useState<boolean | null>(() =>
+    isTauriRuntime() ? null : true,
+  );
   const [view, setView] = useState<"main" | "settings" | "hardware-dev">(() => getInitialView());
   const [config, setConfig] = useState<StoredConfig>(() => loadConfig());
   const [event, setEvent] = useState<AgentStatusEvent>(() =>
@@ -146,6 +151,17 @@ export default function App() {
   const leaderboardTimePeriodRef = useRef<LeaderboardTimePeriod>("total");
   const lastUsageUploadKeyRef = useRef<Partial<Record<AgentProvider, string>>>({});
   const windowLabelRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      setClientActivated(true);
+      return;
+    }
+
+    getActivationStatus()
+      .then(setClientActivated)
+      .catch(() => setClientActivated(false));
+  }, []);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -632,6 +648,14 @@ export default function App() {
 
   const openSettingsClick = useGuardedClick(openPetSettings);
   const acknowledgeClick = useGuardedClick(acknowledgeCompleted);
+
+  if (clientActivated === null) {
+    return <main className="activation-screen activation-screen--loading" aria-busy="true" />;
+  }
+
+  if (!clientActivated) {
+    return <ActivationScreen onActivated={() => setClientActivated(true)} />;
+  }
 
   if (view === "settings") {
     return (

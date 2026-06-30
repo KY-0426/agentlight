@@ -13,6 +13,9 @@ Agent Light 多用户软件 MVP 的 Fastify 服务端。
 - `POST /api/auth/refresh`
 - `GET /api/me`
 - `POST /api/devices/bootstrap`，安装时自动创建设备账户（无需登录），重复调用幂等返回同一用户
+- `POST /api/activation/activate`，桌面客户端激活（消耗客户激活码并返回签名凭证）
+- `GET /api/admin/activation-codes` / `POST /api/admin/activation-codes` / `POST /api/admin/activation-codes/:id/revoke`（需 `ADMIN_API_KEY`）
+- `/admin/` 管理后台：生成、列表、作废客户激活码
 - `POST /api/devices/register`（需登录，用于手机号账户绑定设备）
 - `POST /api/hardware-devices/bind`
 - `POST /api/usage/codex-thread`
@@ -57,3 +60,5 @@ npm run db:setup
 
 - 本地单元测试使用内存仓储；真实 PostgreSQL migration 执行和数据库集成测试仍需单独跑。
 - 桌面端启动时自动调用 bootstrap，无需登录即可上报 token 并上榜；手机号绑定与多设备合并即将推出
+- Win/Mac 桌面端首次启动需客户激活码；激活成功后本地持久化，可离线使用
+- 管理端通过 `/admin/` 生成激活码；生产环境需配置 `ADMIN_API_KEY` 与 `ACTIVATION_SIGNING_SECRET`

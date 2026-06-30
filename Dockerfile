@@ -22,7 +22,9 @@ ENV NODE_ENV=production \
     PGDATA=/var/lib/postgresql/data \
     DATABASE_URL=postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light \
     ACCESS_TOKEN_SECRET=agent-light-builtin-access-token-secret-v1 \
-    REFRESH_TOKEN_SECRET=agent-light-builtin-refresh-token-secret-v1
+    REFRESH_TOKEN_SECRET=agent-light-builtin-refresh-token-secret-v1 \
+    ADMIN_API_KEY=agent-light-builtin-admin-api-key-v1 \
+    ACTIVATION_SIGNING_SECRET=agent-light-builtin-activation-signing-secret-v1
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
@@ -40,6 +42,8 @@ set -e
 export DATABASE_URL="${DATABASE_URL:-postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light}"
 export ACCESS_TOKEN_SECRET="${ACCESS_TOKEN_SECRET:-agent-light-builtin-access-token-secret-v1}"
 export REFRESH_TOKEN_SECRET="${REFRESH_TOKEN_SECRET:-agent-light-builtin-refresh-token-secret-v1}"
+export ADMIN_API_KEY="${ADMIN_API_KEY:-agent-light-builtin-admin-api-key-v1}"
+export ACTIVATION_SIGNING_SECRET="${ACTIVATION_SIGNING_SECRET:-agent-light-builtin-activation-signing-secret-v1}"
 
 PGDATA="${PGDATA:-/var/lib/postgresql/data}"
 

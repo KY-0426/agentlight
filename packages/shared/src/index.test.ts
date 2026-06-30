@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  activateClientRequestSchema,
+  createActivationCodesRequestSchema,
   codexThreadUsageRequestSchema,
   deviceBootstrapRequestSchema,
   forbiddenUsagePayloadKeys,
@@ -74,6 +76,24 @@ describe("shared schemas", () => {
     ).toBe("codex");
 
     expect(leaderboardTokensQuerySchema.parse({}).agent_provider).toBe("codex");
+  });
+
+  it("accepts client activation payload shape", () => {
+    expect(
+      activateClientRequestSchema.parse({
+        activation_code: "AL-TESTCODE123456",
+        installation_id: "install-activation-001",
+        platform: "windows",
+        app_version: "0.1.3",
+      }),
+    ).toMatchObject({ platform: "windows" });
+
+    expect(
+      createActivationCodesRequestSchema.parse({
+        count: 3,
+        label: "batch-a",
+      }),
+    ).toMatchObject({ count: 3 });
   });
 
   it("accepts device bootstrap payload shape", () => {

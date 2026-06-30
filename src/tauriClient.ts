@@ -488,6 +488,36 @@ export async function getInstallationId(): Promise<string> {
   return invoke<string>("get_installation_id");
 }
 
+export interface ClientActivationRecord {
+  activation_id: string;
+  installation_id: string;
+  activated_at: string;
+  receipt: string;
+  server_url: string;
+}
+
+export async function getActivationStatus(): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return true;
+  }
+
+  return invoke<boolean>("get_activation_status");
+}
+
+export async function activateClient(
+  serverUrl: string,
+  activationCode: string,
+): Promise<ClientActivationRecord> {
+  if (!isTauriRuntime()) {
+    throw new Error("请在 Win/Mac 桌面客户端中激活");
+  }
+
+  return invoke<ClientActivationRecord>("activate_client", {
+    serverUrl,
+    activationCode,
+  });
+}
+
 export async function listAiTools(): Promise<AiToolStatus[]> {
   if (!isTauriRuntime()) {
     return [];

@@ -111,6 +111,8 @@ describe("server app", () => {
       databaseUrl: "postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light",
       accessTokenSecret: "a".repeat(32),
       refreshTokenSecret: "b".repeat(32),
+      adminApiKey: "c".repeat(16),
+      activationSigningSecret: "d".repeat(32),
     });
 
     expect(options.redact.paths).toEqual(
@@ -119,6 +121,7 @@ describe("server app", () => {
         "req.headers.cookie",
         "req.body.password",
         "req.body.verification_code",
+        "req.body.activation_code",
         "req.body.refresh_token",
         "req.body.access_token",
         "req.body.token",

@@ -10,6 +10,8 @@ import { createDb } from "./db";
 import { DrizzleAuthRepository, type AuthRepository } from "./auth/repository";
 import { registerAuthRoutes } from "./auth/routes";
 import { registerMvpRoutes } from "./api/routes";
+import { registerActivationRoutes } from "./activation/routes";
+import { registerAdminRoutes } from "./admin/routes";
 import { registerWebsite } from "./website/register";
 
 export type BuildAppOptions = {
@@ -59,6 +61,8 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   app.get("/api/health", async () => healthPayload(env));
   await registerAuthRoutes(app, { env, repository: authRepository });
   await registerMvpRoutes(app, { env, repository: authRepository });
+  await registerActivationRoutes(app, { env, repository: authRepository });
+  await registerAdminRoutes(app, { env, repository: authRepository });
   await registerWebsite(app);
 
   return app;
@@ -104,6 +108,7 @@ export function buildLoggerOptions(env: ServerEnv) {
         "req.headers['x-api-key']",
         "req.body.password",
         "req.body.verification_code",
+        "req.body.activation_code",
         "req.body.refresh_token",
         "req.body.access_token",
         "req.body.token",

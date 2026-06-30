@@ -45,6 +45,7 @@
 | C6 | 跨平台 provider | Planned | Win/Mac 平台适配层已纳入 MVP；Windows Codex 路径先可配置并标 Unverified | 尚未实现 `CodexStatusProvider`、`SystemMetricsProvider`、`SerialPortProvider`、`SecureCredentialStore` |
 | C7 | 本地凭据不进 localStorage | Planned | 安全边界已确认 token 先走 Rust-side 本地凭据文件，P2 再接 Keychain/Credential Manager | 尚未实现凭据存储读写、失败降级和测试 |
 | C8 | 服务端断开离线队列 | Planned | MVP 要求服务端不可用时本地桌宠/RGB 不崩溃，并进入离线排队 | 尚未实现队列、重试、同步状态 UI 和冒烟记录 |
+| C9 | 客户激活码 | Done | `POST /api/activation/activate`、admin API、`/admin/` 管理页、桌面激活页与 Rust 本地凭证 | 需 Win/Mac 实机激活与离线复测 |
 | D1 | 工厂量产工具、OTA、签名、公证、自动更新 | Deferred | 本轮软件 MVP 明确移到 P2 | 后续单独拆量产与发布计划 |
 | R1 | `npm run test` | Done | 2026-06-22 本地运行通过：1 个测试文件，5 个用例 | 无 |
 | R2 | `npm run build` | Done | 2026-06-22 本地运行通过：`tsc -b && vite build` | 无 |

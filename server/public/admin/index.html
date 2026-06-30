@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent Light · 激活码管理</title>
+    <link rel="stylesheet" href="/admin/admin.css" />
+  </head>
+  <body>
+    <div class="admin-shell">
+      <header class="admin-header">
+        <div>
+          <p class="admin-header__eyebrow">Agent Light Admin</p>
+          <h1>客户激活码</h1>
+        </div>
+        <button type="button" class="admin-button admin-button--ghost" id="logout-btn" hidden>退出登录</button>
+      </header>
+
+      <section class="admin-card" id="login-panel">
+        <h2>管理员登录</h2>
+        <p class="admin-note">请输入服务端配置的 <code>ADMIN_API_KEY</code>。</p>
+        <label class="admin-field">
+          <span>Admin Key</span>
+          <input id="admin-key-input" type="password" autocomplete="off" />
+        </label>
+        <button type="button" class="admin-button" id="login-btn">进入管理后台</button>
+        <p class="admin-error" id="login-error" hidden></p>
+      </section>
+
+      <div id="admin-panel" hidden>
+        <section class="admin-card">
+          <h2>生成激活码</h2>
+          <div class="admin-grid">
+            <label class="admin-field">
+              <span>数量</span>
+              <input id="create-count" type="number" min="1" max="100" value="1" />
+            </label>
+            <label class="admin-field">
+              <span>有效期（天，可选）</span>
+              <input id="create-expires-days" type="number" min="1" max="3650" placeholder="留空表示不过期" />
+            </label>
+            <label class="admin-field admin-field--wide">
+              <span>备注</span>
+              <input id="create-label" type="text" maxlength="200" placeholder="客户名 / 批次" />
+            </label>
+          </div>
+          <button type="button" class="admin-button" id="create-btn">生成激活码</button>
+          <div id="created-codes" class="created-codes" hidden>
+            <p class="admin-note">以下明文仅显示一次，请立即复制或导出。</p>
+            <pre id="created-codes-text"></pre>
+            <div class="admin-actions">
+              <button type="button" class="admin-button admin-button--ghost" id="copy-codes-btn">复制全部</button>
+              <button type="button" class="admin-button admin-button--ghost" id="download-codes-btn">导出 CSV</button>
+            </div>
+          </div>
+          <p class="admin-error" id="create-error" hidden></p>
+        </section>
+
+        <section class="admin-card">
+          <div class="admin-toolbar">
+            <h2>激活码列表</h2>
+            <label class="admin-field admin-field--inline">
+              <span>状态</span>
+              <select id="list-status">
+                <option value="">全部</option>
+                <option value="active">active</option>
+                <option value="used">used</option>
+                <option value="revoked">revoked</option>
+              </select>
+            </label>
+            <button type="button" class="admin-button admin-button--ghost" id="refresh-list-btn">刷新</button>
+          </div>
+          <div class="admin-table-wrap">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>状态</th>
+                  <th>备注</th>
+                  <th>过期</th>
+                  <th>使用时间</th>
+                  <th>Installation</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="codes-table-body"></tbody>
+            </table>
+          </div>
+          <p class="admin-note" id="list-summary"></p>
+          <p class="admin-error" id="list-error" hidden></p>
+        </section>
+      </div>
+    </div>
+    <script src="/admin/admin.js" defer></script>
+  </body>
+</html>

@@ -227,6 +227,27 @@ export const phoneVerificationCodes = pgTable(
   }),
 );
 
+export const activationCodes = pgTable(
+  "activation_codes",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    codeHash: text("code_hash").notNull(),
+    status: inviteCodeStatusEnum("status").default("active").notNull(),
+    label: varchar("label", { length: 200 }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    activatedInstallationId: varchar("activated_installation_id", { length: 128 }),
+    activatedPlatform: desktopPlatformEnum("activated_platform"),
+    activatedAppVersion: varchar("activated_app_version", { length: 40 }),
+    ...timestamps,
+  },
+  (table) => ({
+    codeHashUnique: uniqueIndex("activation_codes_code_hash_unique").on(table.codeHash),
+    statusIdx: index("activation_codes_status_idx").on(table.status),
+    installationIdx: index("activation_codes_installation_idx").on(table.activatedInstallationId),
+  }),
+);
+
 export const inviteCodes = pgTable(
   "invite_codes",
   {

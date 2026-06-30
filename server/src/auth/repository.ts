@@ -2,6 +2,7 @@ import { and, desc, eq, gt, gte, isNull, lte, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { AgentProvider, ApiErrorCode, DesktopPlatform, WorkspaceRole } from "@agent-light/shared";
 import * as schema from "../db/schema";
+import { createOpaqueToken, hashOpaqueValue } from "./crypto";
 
 type Db = NodePgDatabase<typeof schema>;
 
@@ -169,6 +170,54 @@ export type GetTokenRankInput = Omit<GetTokenLeaderboardInput, "limit"> & {
   userId: string;
 };
 
+export type ActivationCodeStatus = "active" | "used" | "revoked";
+
+export type ActivationCodeRecord = {
+  id: string;
+  status: ActivationCodeStatus;
+  label: string | null;
+  expiresAt: Date | null;
+  usedAt: Date | null;
+  activatedInstallationId: string | null;
+  activatedPlatform: DesktopPlatform | null;
+  activatedAppVersion: string | null;
+  createdAt: Date;
+};
+
+export type ActivateClientInput = {
+  activationCodeHash: string;
+  installationId: string;
+  platform: DesktopPlatform;
+  appVersion: string;
+};
+
+export type ActivateClientResult = {
+  activationId: string;
+  installationId: string;
+  activatedAt: Date;
+};
+
+export type CreateActivationCodesInput = {
+  count: number;
+  expiresAt: Date | null;
+  label: string | null;
+};
+
+export type CreateActivationCodesResult = {
+  codes: Array<{ id: string; code: string }>;
+};
+
+export type ListActivationCodesInput = {
+  status?: ActivationCodeStatus;
+  limit: number;
+  offset: number;
+};
+
+export type ListActivationCodesResult = {
+  items: ActivationCodeRecord[];
+  total: number;
+};
+
 export interface AuthRepository {
   registerWithInvite(input: RegisterWithInviteInput): Promise<RegisteredIdentity>;
   createPhoneVerificationCode(input: CreatePhoneVerificationCodeInput): Promise<void>;
@@ -188,6 +237,10 @@ export interface AuthRepository {
   getTokenLeaderboard(input: GetTokenLeaderboardInput): Promise<LeaderboardEntryRecord[]>;
   getTokenLeaderboardTotal(input: Omit<GetTokenLeaderboardInput, "limit">): Promise<number>;
   getTokenRank(input: GetTokenRankInput): Promise<number | null>;
+  activateClient(input: ActivateClientInput): Promise<ActivateClientResult>;
+  createActivationCodes(input: CreateActivationCodesInput): Promise<CreateActivationCodesResult>;
+  listActivationCodes(input: ListActivationCodesInput): Promise<ListActivationCodesResult>;
+  revokeActivationCode(id: string): Promise<void>;
 }
 
 export class AuthRepositoryError extends Error {
@@ -740,6 +793,142 @@ export class DrizzleAuthRepository implements AuthRepository {
     const index = rows.findIndex((row) => row.userId === input.userId);
     return index >= 0 ? index + 1 : null;
   }
+
+  async activateClient(input: ActivateClientInput): Promise<ActivateClientResult> {
+    return this.db.transaction(async (tx) => {
+      const [existingByInstallation] = await tx
+        .select()
+        .from(schema.activationCodes)
+        .where(
+          and(
+            eq(schema.activationCodes.activatedInstallationId, input.installationId),
+            eq(schema.activationCodes.status, "used"),
+          ),
+        )
+        .limit(1);
+
+      if (existingByInstallation) {
+        return {
+          activationId: existingByInstallation.id,
+          installationId: input.installationId,
+          activatedAt: existingByInstallation.usedAt ?? new Date(),
+        };
+      }
+
+      const [code] = await tx
+        .select()
+        .from(schema.activationCodes)
+        .where(
+          and(
+            eq(schema.activationCodes.codeHash, input.activationCodeHash),
+            eq(schema.activationCodes.status, "active"),
+            or(isNull(schema.activationCodes.expiresAt), gt(schema.activationCodes.expiresAt, new Date())),
+          ),
+        )
+        .limit(1);
+
+      if (!code) {
+        const [existing] = await tx
+          .select()
+          .from(schema.activationCodes)
+          .where(eq(schema.activationCodes.codeHash, input.activationCodeHash))
+          .limit(1);
+
+        if (!existing) {
+          throw new AuthRepositoryError("activation_code_invalid", "Activation code is invalid", 400);
+        }
+        if (existing.status === "revoked") {
+          throw new AuthRepositoryError("activation_code_revoked", "Activation code has been revoked", 400);
+        }
+        if (existing.status === "used") {
+          throw new AuthRepositoryError("activation_code_used", "Activation code has already been used", 400);
+        }
+        if (existing.expiresAt && existing.expiresAt <= new Date()) {
+          throw new AuthRepositoryError("activation_code_expired", "Activation code has expired", 400);
+        }
+        throw new AuthRepositoryError("activation_code_invalid", "Activation code is invalid", 400);
+      }
+
+      const now = new Date();
+      const [updated] = await tx
+        .update(schema.activationCodes)
+        .set({
+          status: "used",
+          usedAt: now,
+          activatedInstallationId: input.installationId,
+          activatedPlatform: input.platform,
+          activatedAppVersion: input.appVersion,
+          updatedAt: now,
+        })
+        .where(eq(schema.activationCodes.id, code.id))
+        .returning();
+
+      return {
+        activationId: updated.id,
+        installationId: input.installationId,
+        activatedAt: now,
+      };
+    });
+  }
+
+  async createActivationCodes(input: CreateActivationCodesInput): Promise<CreateActivationCodesResult> {
+    const codes: Array<{ id: string; code: string }> = [];
+
+    await this.db.transaction(async (tx) => {
+      for (let index = 0; index < input.count; index += 1) {
+        const plaintext = generateActivationCodePlaintext();
+        const codeHash = hashOpaqueValue(plaintext);
+        const [row] = await tx
+          .insert(schema.activationCodes)
+          .values({
+            codeHash,
+            status: "active",
+            label: input.label,
+            expiresAt: input.expiresAt,
+          })
+          .returning({ id: schema.activationCodes.id });
+
+        codes.push({ id: row.id, code: plaintext });
+      }
+    });
+
+    return { codes };
+  }
+
+  async listActivationCodes(input: ListActivationCodesInput): Promise<ListActivationCodesResult> {
+    const filters = input.status ? eq(schema.activationCodes.status, input.status) : undefined;
+    const whereClause = filters ? and(filters) : undefined;
+
+    const [countRow] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(schema.activationCodes)
+      .where(whereClause);
+
+    const rows = await this.db
+      .select()
+      .from(schema.activationCodes)
+      .where(whereClause)
+      .orderBy(desc(schema.activationCodes.createdAt))
+      .limit(input.limit)
+      .offset(input.offset);
+
+    return {
+      items: rows.map(mapActivationCode),
+      total: Number(countRow?.total ?? 0),
+    };
+  }
+
+  async revokeActivationCode(id: string): Promise<void> {
+    const [updated] = await this.db
+      .update(schema.activationCodes)
+      .set({ status: "revoked", updatedAt: new Date() })
+      .where(and(eq(schema.activationCodes.id, id), eq(schema.activationCodes.status, "active")))
+      .returning({ id: schema.activationCodes.id });
+
+    if (!updated) {
+      throw new AuthRepositoryError("not_found", "Activation code not found or not revocable", 404);
+    }
+  }
 }
 
 type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -965,4 +1154,23 @@ function syntheticDeviceEmail(installationId: string): string {
 
 function defaultDeviceDisplayName(installationId: string): string {
   return `设备 ${installationId.slice(-4)}`;
+}
+
+function generateActivationCodePlaintext(): string {
+  const token = createOpaqueToken(12).replace(/_/g, "").toUpperCase();
+  return `AL-${token.slice(0, 16)}`;
+}
+
+function mapActivationCode(row: typeof schema.activationCodes.$inferSelect): ActivationCodeRecord {
+  return {
+    id: row.id,
+    status: row.status,
+    label: row.label,
+    expiresAt: row.expiresAt,
+    usedAt: row.usedAt,
+    activatedInstallationId: row.activatedInstallationId,
+    activatedPlatform: row.activatedPlatform,
+    activatedAppVersion: row.activatedAppVersion,
+    createdAt: row.createdAt,
+  };
 }

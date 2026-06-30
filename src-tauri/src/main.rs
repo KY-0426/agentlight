@@ -7,7 +7,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,6 +17,7 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewWindow, WindowEvent,
 };
 
+mod activation;
 mod ai_tools;
 mod claude_code;
 mod cursor;
@@ -49,6 +50,7 @@ const INSTALLATION_ID_FILE_NAME: &str = "installation-id";
 const MAX_CLOUD_URL_LEN: usize = 2048;
 const MAX_CLOUD_TOKEN_LEN: usize = 4096;
 const SETTINGS_PAGE_EVENT: &str = "agent-settings-page";
+static RUNTIME_SERVICES_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1319,10 +1321,38 @@ fn list_ai_tool_token_usages() -> Result<Vec<ai_tools::AiToolTokenUsage>, Comman
     ai_tools::list_ai_tool_token_usages()
 }
 
+#[tauri::command]
+fn activate_client(
+    app: AppHandle,
+    runtime: State<AgentRuntime>,
+    server_url: String,
+    activation_code: String,
+) -> Result<activation::ActivationRecord, CommandError> {
+    let record = activation::activate_client(server_url, activation_code)?;
+    ensure_runtime_services(&runtime, &app);
+    Ok(record)
+}
+
+fn ensure_runtime_services(runtime: &AgentRuntime, app: &AppHandle) {
+    if RUNTIME_SERVICES_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    start_local_api(runtime.clone());
+    if let Ok(snapshot) = runtime.snapshot() {
+        runtime.hardware.apply(&snapshot);
+    }
+    runtime.start_hardware_watcher();
+    runtime.start_agent_monitor_watcher();
+    sync::start_sync_worker();
+    if let Err(error) = setup_system_tray(app) {
+        eprintln!("agent-light: failed to create system tray: {error}");
+    }
+}
+
 fn main() {
     let runtime = AgentRuntime::new();
     let managed_runtime = runtime.clone();
-    start_local_api(runtime.clone());
 
     let app = tauri::Builder::default()
         .manage(managed_runtime)
@@ -1350,21 +1380,17 @@ fn main() {
             clear_cloud_session,
             list_ai_tools,
             install_ai_tool,
-            list_ai_tool_token_usages
+            list_ai_tool_token_usages,
+            activation::get_activation_status,
+            activate_client,
         ])
         .setup(move |app| {
             eprintln!("agent-light: setup started");
             if let Err(error) = runtime.set_app_handle(app.handle().clone()) {
                 eprintln!("agent-light: failed to store app handle: {}", error.message);
             }
-            if let Ok(snapshot) = runtime.snapshot() {
-                runtime.hardware.apply(&snapshot);
-            }
-            runtime.start_hardware_watcher();
-            runtime.start_agent_monitor_watcher();
-            sync::start_sync_worker();
-            if let Err(error) = setup_system_tray(app.handle()) {
-                eprintln!("agent-light: failed to create system tray: {error}");
+            if activation::is_client_activated().unwrap_or(false) {
+                ensure_runtime_services(&runtime, app.handle());
             }
             Ok(())
         })
@@ -1978,6 +2004,16 @@ fn start_local_api(runtime: AgentRuntime) {
 fn handle_connection(mut stream: TcpStream, runtime: AgentRuntime) {
     if let Err(error) = stream.set_read_timeout(Some(Duration::from_secs(2))) {
         eprintln!("agent-light: failed to set API read timeout: {error}");
+    }
+
+    if !activation::is_client_activated().unwrap_or(false) {
+        write_error(
+            &mut stream,
+            403,
+            "client_not_activated",
+            "Client is not activated",
+        );
+        return;
     }
 
     let parsed = parse_http_request(&stream);
