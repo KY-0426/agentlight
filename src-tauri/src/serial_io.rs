@@ -43,9 +43,8 @@ pub(crate) fn probe_agent_light_port(port: &str, baud: u32) -> bool {
 }
 
 pub(crate) fn is_agent_light_probe_reply(reply: &str) -> bool {
-    reply.contains("PONG")
-        && reply
-            .contains(&format!("protocol_version={HARDWARE_PROTOCOL}"))
+    (reply.contains("PONG") || reply.contains("READY") || reply.contains("HELLO"))
+        && reply.contains(&format!("protocol_version={HARDWARE_PROTOCOL}"))
 }
 
 fn with_serial_lock<T>(operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
@@ -59,7 +58,8 @@ fn transact_raw(port: &str, baud: u32, command: &str) -> Result<String, String> 
     let port_name = normalize_port_name(port);
     let mut serial = serialport::new(&port_name, baud)
         .timeout(SERIAL_IO_TIMEOUT)
-        .dtr_on_open(false)
+        // ESP32-C3 USB CDC treats dropped DTR as a reset signal; keep it asserted.
+        .dtr_on_open(true)
         .open()
         .map_err(|error| format!("Could not open ESP32 serial port {port_name}: {error}"))?;
 
@@ -127,9 +127,20 @@ mod tests {
     }
 
     #[test]
+    fn accepts_startup_reply_with_protocol_version() {
+        let reply = concat!(
+            "READY firmware_version=0.3.0 ",
+            "protocol_version=agent-light-rgb-v1 ",
+            "hardware_revision=esp32-mini-rgb-dev\n"
+        );
+        assert!(is_agent_light_probe_reply(reply));
+    }
+
+    #[test]
     fn rejects_unrelated_serial_device_reply() {
         assert!(!is_agent_light_probe_reply("OK\r\n"));
         assert!(!is_agent_light_probe_reply("PONG protocol=other\n"));
+        assert!(!is_agent_light_probe_reply("ESP-ROM:esp32c3-api1-20210207\n"));
     }
 
     #[test]
