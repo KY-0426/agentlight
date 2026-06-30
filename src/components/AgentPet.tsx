@@ -1,7 +1,7 @@
 import { memo, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { AgentState } from "../domain/status";
 
-const assetVersion = "20260629-pet-strips-1";
+const assetVersion = "20260630-standby-scale-1";
 
 const frame = (state: AgentState, index: number) =>
   `/assets/pet-frames/${state}-${String(index).padStart(2, "0")}.png?v=${assetVersion}`;

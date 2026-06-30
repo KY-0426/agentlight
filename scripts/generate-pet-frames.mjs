@@ -23,6 +23,10 @@ const frameCounts = {
   attention: 6,
 };
 
+const stripCrop = {
+  standby: { top: 119, height: 456 },
+};
+
 function buildFrameWidths(totalWidth, frameCount) {
   const base = Math.floor(totalWidth / frameCount);
   const remainder = totalWidth - base * frameCount;
@@ -53,9 +57,9 @@ async function sliceStrip(state) {
     await sharp(stripPath)
       .extract({
         left: offsets[index],
-        top: 0,
+        top: stripCrop[state]?.top ?? 0,
         width: widths[index],
-        height: stripHeight,
+        height: stripCrop[state]?.height ?? stripHeight,
       })
       .resize(outputSize, outputSize, {
         fit: "contain",
