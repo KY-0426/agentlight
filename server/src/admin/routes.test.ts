@@ -34,7 +34,7 @@ async function createTestApp() {
   return { app, authRepository };
 }
 
-async function loginAsAdmin(app: Awaited<ReturnType<typeof createTestApp>>) {
+async function loginAsAdmin(app: Awaited<ReturnType<typeof createTestApp>>["app"]) {
   const response = await app.inject({
     method: "POST",
     url: "/api/admin/login",
@@ -48,6 +48,15 @@ async function loginAsAdmin(app: Awaited<ReturnType<typeof createTestApp>>) {
   return {
     authorization: `Bearer ${response.json().data.access_token}`,
   };
+}
+
+async function seedPhoneUser(authRepository: InMemoryAuthRepository) {
+  const identity = await authRepository.registerOrLoginWithPhone({
+    phoneNumber: "13800138000",
+    passwordHash: await hashPassword("phone-user-password"),
+    displayName: "手机用户",
+  });
+  return identity.user;
 }
 
 describe("admin activation routes", () => {
@@ -167,5 +176,125 @@ describe("admin activation routes", () => {
 
     expect(revoke.statusCode).toBe(404);
     expect(revoke.json().error.code).toBe("not_found");
+  });
+});
+
+describe("admin user routes", () => {
+  it("lists, details, disables and enables end users", async () => {
+    const { app, authRepository } = await createTestApp();
+    const user = await seedPhoneUser(authRepository);
+    const headers = await loginAsAdmin(app);
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/admin/users?type=phone&limit=10&offset=0",
+      headers,
+    });
+
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().data.total).toBeGreaterThanOrEqual(1);
+    expect(listed.json().data.items[0].user_type).toBe("phone");
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/admin/users/${user.id}`,
+      headers,
+    });
+
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().data.user.id).toBe(user.id);
+
+    const disabled = await app.inject({
+      method: "POST",
+      url: `/api/admin/users/${user.id}/disable`,
+      headers,
+      payload: {},
+    });
+
+    expect(disabled.statusCode).toBe(200);
+    expect(disabled.json().data.disabled_at).not.toBeNull();
+
+    const enabled = await app.inject({
+      method: "POST",
+      url: `/api/admin/users/${user.id}/enable`,
+      headers,
+      payload: {},
+    });
+
+    expect(enabled.statusCode).toBe(200);
+    expect(enabled.json().data.disabled_at).toBeNull();
+  });
+});
+
+describe("admin account routes", () => {
+  it("creates, lists, updates and disables admin accounts with guardrails", async () => {
+    const { app } = await createTestApp();
+    const headers = await loginAsAdmin(app);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/admin/admins",
+      headers,
+      payload: {
+        username: "ops",
+        password: "ops-password-12",
+        display_name: "Ops Admin",
+      },
+    });
+
+    expect(created.statusCode).toBe(201);
+    const opsId = created.json().data.id;
+
+    const listed = await app.inject({
+      method: "GET",
+      url: "/api/admin/admins?limit=10&offset=0",
+      headers,
+    });
+
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().data.total).toBeGreaterThanOrEqual(2);
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: `/api/admin/admins/${opsId}`,
+      headers,
+      payload: {
+        display_name: "Ops Updated",
+        password: "ops-password-34",
+      },
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().data.display_name).toBe("Ops Updated");
+
+    const disableSelf = await app.inject({
+      method: "POST",
+      url: `/api/admin/admins/${testAdminId}/disable`,
+      headers,
+      payload: {},
+    });
+
+    expect(disableSelf.statusCode).toBe(403);
+    expect(disableSelf.json().error.code).toBe("admin_self_disable_forbidden");
+
+    const disableOps = await app.inject({
+      method: "POST",
+      url: `/api/admin/admins/${opsId}/disable`,
+      headers,
+      payload: {},
+    });
+
+    expect(disableOps.statusCode).toBe(200);
+    expect(disableOps.json().data.disabled_at).not.toBeNull();
+
+    const enableOps = await app.inject({
+      method: "POST",
+      url: `/api/admin/admins/${opsId}/enable`,
+      headers,
+      payload: {},
+    });
+
+    expect(enableOps.statusCode).toBe(200);
+    expect(enableOps.json().data.disabled_at).toBeNull();
   });
 });

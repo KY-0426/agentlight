@@ -39,6 +39,7 @@ import {
   sendPhoneVerificationCodeCloud,
   updateCloudDisplayName,
   syncCloudProfileFromServer,
+  ensureCloudAccessToken,
   setAgentState,
   setAlwaysOnTop,
   setHardwareLightSettings,
@@ -469,6 +470,7 @@ export default function App() {
       let session = await loadCloudSession();
       if (session?.access_token && session.device_id) {
         try {
+          session = await ensureCloudAccessToken(session);
           session = await syncCloudProfileFromServer(session);
         } catch {
           // 保留本地会话，避免离线时清空
@@ -504,13 +506,20 @@ export default function App() {
     setLeaderboardError(null);
 
     try {
-      const snapshot = await getTokenLeaderboard({
-        serverUrl: session?.server_url ?? resolveDefaultCloudServerUrl(),
-        accessToken: session?.access_token,
-        agentProvider,
-        timePeriod,
-        limit: 20,
-      });
+      const { response: snapshot, session: refreshedSession } = await getTokenLeaderboard(
+        {
+          serverUrl: session?.server_url ?? resolveDefaultCloudServerUrl(),
+          accessToken: session?.access_token,
+          agentProvider,
+          timePeriod,
+          limit: 20,
+        },
+        session,
+      );
+      if (refreshedSession && refreshedSession !== cloudSessionRef.current) {
+        setCloudSession(refreshedSession);
+        cloudSessionRef.current = refreshedSession;
+      }
       setLeaderboard(snapshot);
       setLeaderboardStatus("ready");
     } catch (error) {

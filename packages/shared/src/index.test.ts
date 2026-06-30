@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   activateClientRequestSchema,
+  activationCodeDtoSchema,
+  adminEndUserDetailSchema,
+  adminEndUserDtoSchema,
+  createAdminAccountRequestSchema,
   createActivationCodesRequestSchema,
   codexThreadUsageRequestSchema,
   deviceBootstrapRequestSchema,
   forbiddenUsagePayloadKeys,
   leaderboardTokensQuerySchema,
+  listAdminEndUsersQuerySchema,
   normalizeAgentStatus,
   sendPhoneVerificationCodeRequestSchema,
   verifyPhoneLoginRequestSchema,
@@ -150,6 +155,70 @@ describe("shared schemas", () => {
         agentProvider,
       );
     }
+  });
+
+  it("accepts admin end-user and admin account schemas", () => {
+    expect(
+      listAdminEndUsersQuerySchema.parse({
+        q: "test",
+        type: "phone",
+        status: "active",
+        limit: 10,
+      }),
+    ).toMatchObject({ type: "phone" });
+
+    expect(
+      adminEndUserDtoSchema.parse({
+        id: "018f6d66-60ce-7b6f-96f8-111111111111",
+        email: "phone-13800138000@phone.agent-light.local",
+        phone_number: "13800138000",
+        display_name: "手机用户",
+        user_type: "phone",
+        disabled_at: null,
+        device_count: 1,
+        created_at: "2026-01-01T00:00:00.000Z",
+      }),
+    ).toMatchObject({ user_type: "phone" });
+
+    expect(
+      createAdminAccountRequestSchema.parse({
+        username: "ops",
+        password: "long-password",
+        display_name: "Ops Admin",
+      }),
+    ).toMatchObject({ username: "ops" });
+
+    expect(
+      activationCodeDtoSchema.parse({
+        id: "018f6d66-60ce-7b6f-96f8-222222222222",
+        status: "used",
+        label: "batch-a",
+        expires_at: null,
+        used_at: "2026-01-02T00:00:00.000Z",
+        user_id: "018f6d66-60ce-7b6f-96f8-111111111111",
+        activated_installation_id: "install-activation-001",
+        activated_platform: "windows",
+        activated_app_version: "0.1.3",
+        created_at: "2026-01-01T00:00:00.000Z",
+      }),
+    ).toMatchObject({ user_id: "018f6d66-60ce-7b6f-96f8-111111111111" });
+
+    expect(
+      adminEndUserDetailSchema.parse({
+        user: {
+          id: "018f6d66-60ce-7b6f-96f8-111111111111",
+          email: "user@example.com",
+          phone_number: null,
+          display_name: "Agent User",
+          user_type: "email",
+          disabled_at: null,
+          device_count: 0,
+          created_at: "2026-01-01T00:00:00.000Z",
+        },
+        devices: [],
+        activation_code: null,
+      }),
+    ).toMatchObject({ activation_code: null });
   });
 
   it("rejects path-bearing Codex usage payloads by schema shape", () => {

@@ -547,12 +547,56 @@ export async function listAiToolTokenUsages(): Promise<AiToolTokenUsage[]> {
   return invoke<AiToolTokenUsage[]>("list_ai_tool_token_usages");
 }
 
+const TOKEN_REFRESH_MARGIN_MS = 60_000;
+
 export async function loadCloudSession(): Promise<CloudSession | null> {
   if (!isTauriRuntime()) {
     return null;
   }
 
   return invoke<CloudSession | null>("load_cloud_session");
+}
+
+export function isCloudAccessTokenExpiringSoon(session: CloudSession): boolean {
+  return session.expires_at_ms - Date.now() <= TOKEN_REFRESH_MARGIN_MS;
+}
+
+export async function refreshCloudAccessToken(session: CloudSession): Promise<CloudSession> {
+  const response = await fetch(buildApiUrl(session.server_url, "/api/auth/refresh"), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      refresh_token: session.refresh_token,
+    }),
+  }).catch(() => {
+    throw new Error("无法连接云端，请检查网络或服务端地址");
+  });
+
+  const payload = await readJsonPayload(response);
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload) ?? `续期接口返回 ${response.status}`);
+  }
+  if (!isSuccessRecord(payload) || !isRefreshTokenPayload(payload.data)) {
+    throw new Error("续期响应格式不正确");
+  }
+
+  return saveCloudSession({
+    ...session,
+    access_token: payload.data.access_token,
+    refresh_token: payload.data.refresh_token,
+    expires_at_ms: Date.now() + payload.data.expires_in_seconds * 1000,
+  });
+}
+
+export async function ensureCloudAccessToken(session: CloudSession): Promise<CloudSession> {
+  if (!isCloudAccessTokenExpiringSoon(session)) {
+    return session;
+  }
+
+  return refreshCloudAccessToken(session);
 }
 
 export function isDeviceCloudAccount(session: CloudSession | null | undefined): boolean {
@@ -645,7 +689,8 @@ export async function ensureCloudSession(
   const existing = await loadCloudSession();
   if (existing?.access_token && existing.device_id) {
     try {
-      return await syncCloudProfileFromServer(existing);
+      const refreshed = await ensureCloudAccessToken(existing);
+      return await syncCloudProfileFromServer(refreshed);
     } catch {
       return existing;
     }
@@ -754,15 +799,29 @@ export async function updateCloudDisplayName(
 }
 
 export async function syncCloudProfileFromServer(session: CloudSession): Promise<CloudSession> {
-  const response = await fetch(buildApiUrl(session.server_url, "/api/me"), {
+  let activeSession = await ensureCloudAccessToken(session);
+  let response = await fetch(buildApiUrl(activeSession.server_url, "/api/me"), {
     method: "GET",
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${session.access_token}`,
+      Authorization: `Bearer ${activeSession.access_token}`,
     },
   }).catch(() => {
     throw new Error("无法连接云端，请检查网络或服务端地址");
   });
+
+  if (response.status === 401) {
+    activeSession = await refreshCloudAccessToken(activeSession);
+    response = await fetch(buildApiUrl(activeSession.server_url, "/api/me"), {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${activeSession.access_token}`,
+      },
+    }).catch(() => {
+      throw new Error("无法连接云端，请检查网络或服务端地址");
+    });
+  }
 
   const payload = await readJsonPayload(response);
   if (!response.ok) {
@@ -772,9 +831,9 @@ export async function syncCloudProfileFromServer(session: CloudSession): Promise
     throw new Error("账号信息响应格式不正确");
   }
 
-  const workspaceId = payload.data.workspaces[0]?.workspace.id ?? session.workspace_id;
+  const workspaceId = payload.data.workspaces[0]?.workspace.id ?? activeSession.workspace_id;
   return saveCloudSession({
-    ...session,
+    ...activeSession,
     user_id: payload.data.user.id,
     user_email: payload.data.user.email,
     user_phone_number: payload.data.user.phone_number,
@@ -785,19 +844,52 @@ export async function syncCloudProfileFromServer(session: CloudSession): Promise
 
 export async function getTokenLeaderboard(
   request: TokenLeaderboardRequest,
-): Promise<TokenLeaderboardResponse> {
+  session?: CloudSession | null,
+): Promise<{ response: TokenLeaderboardResponse; session: CloudSession | null }> {
+  let activeSession = session ?? null;
+  let accessToken = request.accessToken?.trim();
+  if (activeSession?.refresh_token) {
+    try {
+      activeSession = await ensureCloudAccessToken(activeSession);
+      accessToken = activeSession.access_token;
+    } catch {
+      activeSession = null;
+      accessToken = undefined;
+    }
+  }
+
   const headers: Record<string, string> = {
     Accept: "application/json",
   };
-  const accessToken = request.accessToken?.trim();
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
   }
 
-  const response = await fetch(buildTokenLeaderboardUrl(request), {
+  let response = await fetch(buildTokenLeaderboardUrl(request), {
     method: "GET",
     headers,
   });
+
+  if (response.status === 401 && activeSession?.refresh_token) {
+    try {
+      activeSession = await refreshCloudAccessToken(activeSession);
+      response = await fetch(buildTokenLeaderboardUrl(request), {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${activeSession.access_token}`,
+        },
+      });
+    } catch {
+      activeSession = null;
+      response = await fetch(buildTokenLeaderboardUrl(request), {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+    }
+  }
 
   let payload: unknown = null;
   try {
@@ -810,7 +902,10 @@ export async function getTokenLeaderboard(
     throw new Error(getApiErrorMessage(payload) ?? `排行榜接口返回 ${response.status}`);
   }
 
-  return parseTokenLeaderboardResponse(payload);
+  return {
+    response: parseTokenLeaderboardResponse(payload),
+    session: activeSession,
+  };
 }
 
 export async function uploadCodexThreadUsage(
@@ -972,7 +1067,8 @@ function isSuccessRecord(value: unknown): value is { ok: true; data: unknown } {
   return isRecord(value) && value.ok === true && "data" in value;
 }
 
-function isMeResponsePayload(value: unknown): value is AuthSessionPayload["user"] & {
+function isMeResponsePayload(value: unknown): value is {
+  user: AuthSessionPayload["user"];
   workspaces: AuthSessionPayload["workspaces"];
 } {
   if (!isRecord(value) || !isRecord(value.user) || !Array.isArray(value.workspaces)) {
@@ -985,6 +1081,21 @@ function isMeResponsePayload(value: unknown): value is AuthSessionPayload["user"
     (value.user.phone_number === null || typeof value.user.phone_number === "string") &&
     typeof value.user.display_name === "string" &&
     value.workspaces.some((item) => isRecord(item) && isRecord(item.workspace) && typeof item.workspace.id === "string")
+  );
+}
+
+type RefreshTokenPayload = {
+  access_token: string;
+  refresh_token: string;
+  expires_in_seconds: number;
+};
+
+function isRefreshTokenPayload(value: unknown): value is RefreshTokenPayload {
+  return (
+    isRecord(value) &&
+    typeof value.access_token === "string" &&
+    typeof value.refresh_token === "string" &&
+    typeof value.expires_in_seconds === "number"
   );
 }
 

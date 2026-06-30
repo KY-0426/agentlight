@@ -252,12 +252,108 @@ export const activationCodeDtoSchema = z.object({
   label: z.string().max(200).nullable(),
   expires_at: isoDateStringSchema.nullable(),
   used_at: isoDateStringSchema.nullable(),
+  user_id: uuidSchema.nullable(),
   activated_installation_id: z.string().min(12).max(128).nullable(),
   activated_platform: desktopPlatformSchema.nullable(),
   activated_app_version: z.string().min(1).max(40).nullable(),
   created_at: isoDateStringSchema,
 });
 export type ActivationCodeDto = z.infer<typeof activationCodeDtoSchema>;
+
+export const adminEndUserTypeValues = ["email", "phone", "activation"] as const;
+export const adminEndUserTypeSchema = z.enum(adminEndUserTypeValues);
+export type AdminEndUserType = z.infer<typeof adminEndUserTypeSchema>;
+
+export const adminEndUserStatusValues = ["active", "disabled"] as const;
+export const adminEndUserStatusSchema = z.enum(adminEndUserStatusValues);
+export type AdminEndUserStatus = z.infer<typeof adminEndUserStatusSchema>;
+
+export const adminEndUserDtoSchema = z.object({
+  id: uuidSchema,
+  email: emailSchema,
+  phone_number: phoneNumberSchema.nullable(),
+  display_name: z.string().min(1).max(120),
+  user_type: adminEndUserTypeSchema,
+  disabled_at: isoDateStringSchema.nullable(),
+  device_count: z.number().int().nonnegative(),
+  created_at: isoDateStringSchema,
+});
+export type AdminEndUserDto = z.infer<typeof adminEndUserDtoSchema>;
+
+export const listAdminEndUsersQuerySchema = z.object({
+  q: z.string().trim().min(1).max(120).optional(),
+  type: adminEndUserTypeSchema.optional(),
+  status: adminEndUserStatusSchema.optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type ListAdminEndUsersQuery = z.infer<typeof listAdminEndUsersQuerySchema>;
+
+export const listAdminEndUsersResponseSchema = z.object({
+  items: z.array(adminEndUserDtoSchema),
+  total: z.number().int().nonnegative(),
+});
+export type ListAdminEndUsersResponse = z.infer<typeof listAdminEndUsersResponseSchema>;
+
+export const adminEndUserDeviceDtoSchema = z.object({
+  id: uuidSchema,
+  installation_id: z.string().min(12).max(128),
+  platform: desktopPlatformSchema,
+  app_version: z.string().min(1).max(40),
+  device_label: z.string().min(1).max(120).nullable(),
+  last_seen_at: isoDateStringSchema.nullable(),
+  created_at: isoDateStringSchema,
+});
+export type AdminEndUserDeviceDto = z.infer<typeof adminEndUserDeviceDtoSchema>;
+
+export const adminEndUserActivationSummarySchema = z.object({
+  id: uuidSchema,
+  status: activationCodeStatusSchema,
+  label: z.string().max(200).nullable(),
+  used_at: isoDateStringSchema.nullable(),
+});
+export type AdminEndUserActivationSummary = z.infer<typeof adminEndUserActivationSummarySchema>;
+
+export const adminEndUserDetailSchema = z.object({
+  user: adminEndUserDtoSchema,
+  devices: z.array(adminEndUserDeviceDtoSchema),
+  activation_code: adminEndUserActivationSummarySchema.nullable(),
+});
+export type AdminEndUserDetail = z.infer<typeof adminEndUserDetailSchema>;
+
+export const adminAccountDtoSchema = z.object({
+  id: uuidSchema,
+  username: adminUsernameSchema,
+  display_name: z.string().min(1).max(120),
+  disabled_at: isoDateStringSchema.nullable(),
+  created_at: isoDateStringSchema,
+});
+export type AdminAccountDto = z.infer<typeof adminAccountDtoSchema>;
+
+export const listAdminAccountsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+export type ListAdminAccountsQuery = z.infer<typeof listAdminAccountsQuerySchema>;
+
+export const listAdminAccountsResponseSchema = z.object({
+  items: z.array(adminAccountDtoSchema),
+  total: z.number().int().nonnegative(),
+});
+export type ListAdminAccountsResponse = z.infer<typeof listAdminAccountsResponseSchema>;
+
+export const createAdminAccountRequestSchema = z.object({
+  username: adminUsernameSchema,
+  password: passwordSchema,
+  display_name: z.string().trim().min(1).max(120),
+}).strict();
+export type CreateAdminAccountRequest = z.infer<typeof createAdminAccountRequestSchema>;
+
+export const updateAdminAccountRequestSchema = z.object({
+  display_name: z.string().trim().min(1).max(120).optional(),
+  password: passwordSchema.optional(),
+}).strict();
+export type UpdateAdminAccountRequest = z.infer<typeof updateAdminAccountRequestSchema>;
 
 export const createActivationCodeItemSchema = z.object({
   id: uuidSchema,
@@ -370,6 +466,8 @@ export const apiErrorCodeValues = [
   "activation_code_expired",
   "activation_code_required",
   "admin_unauthorized",
+  "admin_self_disable_forbidden",
+  "admin_last_account",
   "client_not_activated",
   "verification_code_invalid",
   "verification_code_expired",

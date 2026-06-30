@@ -27,10 +27,17 @@ import {
   type ActivateClientInput,
   type ActivateClientResult,
   type ActivationCodeRecord,
+  type AdminEndUserActivationSummary,
+  type AdminEndUserDetailResult,
+  type AdminEndUserDeviceRecord,
+  type AdminEndUserListItem,
   type CreateActivationCodesInput,
   type CreateActivationCodesResult,
   type ListActivationCodesInput,
   type ListActivationCodesResult,
+  type ListUsersForAdminInput,
+  type ListUsersForAdminResult,
+  inferAdminEndUserType,
 } from "./repository";
 
 type InviteRecord = {
@@ -623,6 +630,7 @@ export class InMemoryAuthRepository implements AuthRepository {
         label: input.label,
         expiresAt: input.expiresAt,
         usedAt: null,
+        userId: null,
         activatedInstallationId: null,
         activatedPlatform: null,
         activatedAppVersion: null,
@@ -667,6 +675,73 @@ export class InMemoryAuthRepository implements AuthRepository {
     record.status = "revoked";
   }
 
+  async listUsersForAdmin(input: ListUsersForAdminInput): Promise<ListUsersForAdminResult> {
+    const items = [...this.users.values()]
+      .filter((user) => matchesAdminUserFilters(user, input))
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+
+    return {
+      items: items.slice(input.offset, input.offset + input.limit).map((user) => toAdminEndUserListItem(this, user)),
+      total: items.length,
+    };
+  }
+
+  async getUserAdminDetail(userId: string): Promise<AdminEndUserDetailResult | undefined> {
+    const user = this.users.get(userId);
+    if (!user) {
+      return undefined;
+    }
+
+    const devices = [...this.devices.values()]
+      .filter((device) => device.userId === userId)
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+      .map(toAdminEndUserDeviceRecord);
+
+    let activationCode: AdminEndUserActivationSummary | null = null;
+    for (const record of this.activationCodes.values()) {
+      if (record.userId === userId) {
+        activationCode = {
+          id: record.id,
+          status: record.status,
+          label: record.label,
+          usedAt: record.usedAt,
+        };
+        break;
+      }
+    }
+
+    return {
+      user,
+      deviceCount: devices.length,
+      userType: inferAdminEndUserType(user.email),
+      devices,
+      activationCode,
+    };
+  }
+
+  async setUserDisabled(userId: string, disabled: boolean): Promise<UserRecord> {
+    const user = this.users.get(userId);
+    if (!user) {
+      throw new AuthRepositoryError("not_found", "User not found", 404);
+    }
+
+    const updated: UserRecord = {
+      ...user,
+      disabledAt: disabled ? new Date() : null,
+    };
+    this.users.set(userId, updated);
+
+    if (disabled) {
+      for (const [id, token] of this.refreshTokens.entries()) {
+        if (token.userId === userId && !token.revokedAt) {
+          this.refreshTokens.set(id, { ...token, revokedAt: new Date() });
+        }
+      }
+    }
+
+    return updated;
+  }
+
   private findActivationUserForInstallation(installationId: string): { id: string } | undefined {
     for (const record of this.activationCodes.values()) {
       if (record.status === "used" && record.activatedInstallationId === installationId && record.userId) {
@@ -698,4 +773,50 @@ function generateRandomDisplayName(): string {
 function syntheticPhoneEmail(phoneNumber: string): string {
   const normalized = phoneNumber.replace("+", "00");
   return `phone-${normalized}@phone.agent-light.local`;
+}
+
+function matchesAdminUserFilters(user: UserRecord, input: ListUsersForAdminInput): boolean {
+  if (input.type && inferAdminEndUserType(user.email) !== input.type) {
+    return false;
+  }
+
+  if (input.status === "active" && user.disabledAt) {
+    return false;
+  }
+
+  if (input.status === "disabled" && !user.disabledAt) {
+    return false;
+  }
+
+  if (input.q) {
+    const needle = input.q.toLowerCase();
+    return (
+      user.email.toLowerCase().includes(needle) ||
+      user.displayName.toLowerCase().includes(needle) ||
+      (user.phoneNumber?.toLowerCase().includes(needle) ?? false)
+    );
+  }
+
+  return true;
+}
+
+function toAdminEndUserListItem(repository: InMemoryAuthRepository, user: UserRecord): AdminEndUserListItem {
+  const deviceCount = [...repository["devices"].values()].filter((device) => device.userId === user.id).length;
+  return {
+    user,
+    deviceCount,
+    userType: inferAdminEndUserType(user.email),
+  };
+}
+
+function toAdminEndUserDeviceRecord(device: DeviceRecord): AdminEndUserDeviceRecord {
+  return {
+    id: device.id,
+    installationId: device.installationId,
+    platform: device.platform,
+    appVersion: device.appVersion,
+    deviceLabel: device.deviceLabel,
+    lastSeenAt: null,
+    createdAt: device.createdAt,
+  };
 }

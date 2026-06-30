@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, gte, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { AgentProvider, ApiErrorCode, DesktopPlatform, WorkspaceRole } from "@agent-light/shared";
 import * as schema from "../db/schema";
@@ -220,6 +220,65 @@ export type ListActivationCodesResult = {
   total: number;
 };
 
+export type AdminEndUserType = "email" | "phone" | "activation";
+export type AdminEndUserStatus = "active" | "disabled";
+
+export type ListUsersForAdminInput = {
+  q?: string;
+  type?: AdminEndUserType;
+  status?: AdminEndUserStatus;
+  limit: number;
+  offset: number;
+};
+
+export type AdminEndUserListItem = {
+  user: UserRecord;
+  deviceCount: number;
+  userType: AdminEndUserType;
+};
+
+export type ListUsersForAdminResult = {
+  items: AdminEndUserListItem[];
+  total: number;
+};
+
+export type AdminEndUserDeviceRecord = {
+  id: string;
+  installationId: string;
+  platform: DesktopPlatform;
+  appVersion: string;
+  deviceLabel: string | null;
+  lastSeenAt: Date | null;
+  createdAt: Date;
+};
+
+export type AdminEndUserActivationSummary = {
+  id: string;
+  status: ActivationCodeStatus;
+  label: string | null;
+  usedAt: Date | null;
+};
+
+export type AdminEndUserDetailResult = {
+  user: UserRecord;
+  deviceCount: number;
+  userType: AdminEndUserType;
+  devices: AdminEndUserDeviceRecord[];
+  activationCode: AdminEndUserActivationSummary | null;
+};
+
+export function inferAdminEndUserType(email: string): AdminEndUserType {
+  if (email.endsWith("@phone.agent-light.local") && email.startsWith("phone-")) {
+    return "phone";
+  }
+
+  if (email.endsWith("@activation.agent-light.local") && email.startsWith("activation-")) {
+    return "activation";
+  }
+
+  return "email";
+}
+
 export interface AuthRepository {
   registerWithInvite(input: RegisterWithInviteInput): Promise<RegisteredIdentity>;
   createPhoneVerificationCode(input: CreatePhoneVerificationCodeInput): Promise<void>;
@@ -243,6 +302,9 @@ export interface AuthRepository {
   createActivationCodes(input: CreateActivationCodesInput): Promise<CreateActivationCodesResult>;
   listActivationCodes(input: ListActivationCodesInput): Promise<ListActivationCodesResult>;
   revokeActivationCode(id: string): Promise<void>;
+  listUsersForAdmin(input: ListUsersForAdminInput): Promise<ListUsersForAdminResult>;
+  getUserAdminDetail(userId: string): Promise<AdminEndUserDetailResult | undefined>;
+  setUserDisabled(userId: string, disabled: boolean): Promise<UserRecord>;
 }
 
 export class AuthRepositoryError extends Error {
@@ -966,6 +1028,104 @@ export class DrizzleAuthRepository implements AuthRepository {
       .set({ status: "revoked", updatedAt: new Date() })
       .where(eq(schema.activationCodes.id, id));
   }
+
+  async listUsersForAdmin(input: ListUsersForAdminInput): Promise<ListUsersForAdminResult> {
+    const whereClause = buildAdminUserWhere(input);
+    const deviceCount = sql<number>`(
+      select count(*)::int
+      from ${schema.devices}
+      where ${schema.devices.userId} = ${schema.users.id}
+    )`;
+
+    const [countRow] = await this.db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(schema.users)
+      .where(whereClause);
+
+    const rows = await this.db
+      .select({
+        user: schema.users,
+        deviceCount,
+      })
+      .from(schema.users)
+      .where(whereClause)
+      .orderBy(desc(schema.users.createdAt))
+      .limit(input.limit)
+      .offset(input.offset);
+
+    return {
+      items: rows.map((row) => ({
+        user: mapUser(row.user),
+        deviceCount: Number(row.deviceCount ?? 0),
+        userType: inferAdminEndUserType(row.user.email),
+      })),
+      total: Number(countRow?.total ?? 0),
+    };
+  }
+
+  async getUserAdminDetail(userId: string): Promise<AdminEndUserDetailResult | undefined> {
+    const [userRow] = await this.db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!userRow) {
+      return undefined;
+    }
+
+    const user = mapUser(userRow);
+    const deviceRows = await this.db
+      .select()
+      .from(schema.devices)
+      .where(eq(schema.devices.userId, userId))
+      .orderBy(desc(schema.devices.lastSeenAt), desc(schema.devices.createdAt));
+
+    const [activationRow] = await this.db
+      .select({
+        id: schema.activationCodes.id,
+        status: schema.activationCodes.status,
+        label: schema.activationCodes.label,
+        usedAt: schema.activationCodes.usedAt,
+      })
+      .from(schema.activationCodes)
+      .where(eq(schema.activationCodes.userId, userId))
+      .orderBy(desc(schema.activationCodes.usedAt), desc(schema.activationCodes.createdAt))
+      .limit(1);
+
+    return {
+      user,
+      deviceCount: deviceRows.length,
+      userType: inferAdminEndUserType(user.email),
+      devices: deviceRows.map(mapAdminEndUserDevice),
+      activationCode: activationRow
+        ? {
+            id: activationRow.id,
+            status: activationRow.status,
+            label: activationRow.label,
+            usedAt: activationRow.usedAt,
+          }
+        : null,
+    };
+  }
+
+  async setUserDisabled(userId: string, disabled: boolean): Promise<UserRecord> {
+    const [existing] = await this.db.select().from(schema.users).where(eq(schema.users.id, userId)).limit(1);
+    if (!existing) {
+      throw new AuthRepositoryError("not_found", "User not found", 404);
+    }
+
+    const disabledAt = disabled ? new Date() : null;
+    const [updated] = await this.db
+      .update(schema.users)
+      .set({ disabledAt, updatedAt: new Date() })
+      .where(eq(schema.users.id, userId))
+      .returning();
+
+    if (disabled) {
+      await this.db
+        .update(schema.refreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(and(eq(schema.refreshTokens.userId, userId), isNull(schema.refreshTokens.revokedAt)));
+    }
+
+    return mapUser(updated);
+  }
 }
 
 type Transaction = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -1160,6 +1320,62 @@ function mapDevice(device: typeof schema.devices.$inferSelect): DeviceRecord {
     deviceLabel: device.deviceLabel,
     createdAt: device.createdAt,
   };
+}
+
+function mapAdminEndUserDevice(device: typeof schema.devices.$inferSelect): AdminEndUserDeviceRecord {
+  return {
+    id: device.id,
+    installationId: device.installationId,
+    platform: device.platform,
+    appVersion: device.appVersion,
+    deviceLabel: device.deviceLabel,
+    lastSeenAt: device.lastSeenAt,
+    createdAt: device.createdAt,
+  };
+}
+
+function buildAdminUserWhere(input: ListUsersForAdminInput) {
+  const filters = [];
+
+  if (input.q) {
+    const pattern = `%${input.q}%`;
+    filters.push(
+      or(
+        ilike(schema.users.email, pattern),
+        ilike(schema.users.displayName, pattern),
+        ilike(schema.users.phoneNumber, pattern),
+      ),
+    );
+  }
+
+  if (input.type === "phone") {
+    filters.push(
+      and(
+        ilike(schema.users.email, "phone-%@phone.agent-light.local"),
+      ),
+    );
+  } else if (input.type === "activation") {
+    filters.push(
+      and(
+        ilike(schema.users.email, "activation-%@activation.agent-light.local"),
+      ),
+    );
+  } else if (input.type === "email") {
+    filters.push(
+      and(
+        sql`${schema.users.email} not ilike 'phone-%@phone.agent-light.local'`,
+        sql`${schema.users.email} not ilike 'activation-%@activation.agent-light.local'`,
+      ),
+    );
+  }
+
+  if (input.status === "active") {
+    filters.push(isNull(schema.users.disabledAt));
+  } else if (input.status === "disabled") {
+    filters.push(isNotNull(schema.users.disabledAt));
+  }
+
+  return filters.length > 0 ? and(...filters) : undefined;
 }
 
 function mapHardwareDevice(hardwareDevice: typeof schema.hardwareDevices.$inferSelect): HardwareDeviceRecord {

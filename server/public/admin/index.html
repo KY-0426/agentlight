@@ -14,37 +14,49 @@
   </head>
   <body>
     <div class="admin-login-screen" id="login-screen">
-      <div class="admin-login-card">
-        <div class="admin-login-brand">
-          <div class="admin-login-brand__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
-              <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" />
-              <path d="M12 22V12M3 7l9 5 9-5" />
-            </svg>
+      <div class="admin-login-layout">
+        <section class="admin-login-hero">
+          <div class="admin-login-brand">
+            <div class="admin-login-brand__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" />
+                <path d="M12 22V12M3 7l9 5 9-5" />
+              </svg>
+            </div>
+            <div>
+              <strong>Agent Light</strong>
+              <span>管理控制台</span>
+            </div>
           </div>
-          <div>
-            <strong>Agent Light</strong>
-            <span>管理后台</span>
-          </div>
-        </div>
-        <h1>管理员登录</h1>
-        <p class="admin-login-hint">
-          使用管理员账号登录。首次部署默认账号 <code>admin</code>，默认密码见数据库迁移说明。
-        </p>
-        <form class="admin-form" id="login-form" autocomplete="on">
-          <label class="admin-field">
-            <span>账号</span>
-            <input id="admin-username-input" type="text" autocomplete="username" value="admin" placeholder="请输入账号" />
-          </label>
-          <label class="admin-field">
-            <span>密码</span>
-            <input id="admin-password-input" type="password" autocomplete="current-password" placeholder="请输入密码" />
-          </label>
-          <button type="submit" class="admin-button admin-button--primary admin-button--block" id="login-btn">
-            进入管理后台
-          </button>
-        </form>
-        <p class="admin-alert admin-alert--error" id="login-error" hidden role="alert"></p>
+          <h1>统一运营后台</h1>
+          <p>管理激活码、终端用户与管理员账号。请使用具备权限的管理员凭证登录。</p>
+          <ul class="admin-login-features">
+            <li>激活码批量生成与作废</li>
+            <li>终端用户查询与禁用</li>
+            <li>管理员账号与权限维护</li>
+          </ul>
+        </section>
+
+        <section class="admin-login-card">
+          <h2>管理员登录</h2>
+          <p class="admin-login-hint">请输入管理员账号和密码</p>
+          <form class="admin-form" id="login-form" autocomplete="on" novalidate>
+            <label class="admin-field" id="login-username-field">
+              <span>账号</span>
+              <input id="admin-username-input" type="text" autocomplete="username" placeholder="2–64 位字母数字" />
+              <span class="admin-field__error" id="login-username-error" hidden></span>
+            </label>
+            <label class="admin-field" id="login-password-field">
+              <span>密码</span>
+              <input id="admin-password-input" type="password" autocomplete="current-password" placeholder="请输入密码" />
+              <span class="admin-field__error" id="login-password-error" hidden></span>
+            </label>
+            <button type="submit" class="admin-button admin-button--primary admin-button--block" id="login-btn">
+              <span class="admin-button__label">进入管理后台</span>
+            </button>
+          </form>
+          <p class="admin-alert admin-alert--error" id="login-error" hidden role="alert"></p>
+        </section>
       </div>
     </div>
 
@@ -69,26 +81,40 @@
             <span class="admin-sidebar__nav-label">激活码</span>
             <span class="admin-sidebar__nav-hint">生成与列表</span>
           </button>
+          <p class="admin-sidebar__group-label">用户</p>
+          <button type="button" class="admin-sidebar__nav-item" data-view="users">
+            <span class="admin-sidebar__nav-label">终端用户</span>
+            <span class="admin-sidebar__nav-hint">查询与禁用</span>
+          </button>
+          <p class="admin-sidebar__group-label">系统</p>
+          <button type="button" class="admin-sidebar__nav-item" data-view="admins">
+            <span class="admin-sidebar__nav-label">管理员</span>
+            <span class="admin-sidebar__nav-hint">账号维护</span>
+          </button>
         </nav>
 
         <div class="admin-sidebar__footer">
           <div class="admin-sidebar__user" id="sidebar-user">
-            <span class="admin-sidebar__user-label">当前账号</span>
+            <span class="admin-sidebar__user-label">当前管理员</span>
             <strong id="sidebar-username">admin</strong>
           </div>
-          <button type="button" class="admin-button admin-button--ghost admin-button--block" id="logout-btn">
-            退出登录
-          </button>
+          <button type="button" class="admin-button admin-button--ghost admin-button--block" id="logout-btn">退出登录</button>
         </div>
       </aside>
 
       <main class="admin-main">
+        <div class="admin-mobile-tabs" role="tablist" aria-label="视图切换">
+          <button type="button" class="admin-mobile-tabs__item is-active" data-view="codes">激活码</button>
+          <button type="button" class="admin-mobile-tabs__item" data-view="users">用户</button>
+          <button type="button" class="admin-mobile-tabs__item" data-view="admins">管理员</button>
+        </div>
+
         <header class="admin-topbar">
           <div>
-            <p class="admin-topbar__eyebrow">授权管理</p>
-            <h1>激活码</h1>
+            <p class="admin-topbar__eyebrow" id="topbar-eyebrow">授权管理</p>
+            <h1 id="topbar-title">激活码</h1>
           </div>
-          <button type="button" class="admin-button admin-button--ghost admin-button--icon" id="refresh-all-btn" title="刷新数据">
+          <button type="button" class="admin-button admin-button--ghost admin-button--icon" id="refresh-all-btn" title="刷新当前视图">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M21 12a9 9 0 1 1-2.64-6.36" />
               <path d="M21 3v6h-6" />
@@ -97,112 +123,246 @@
           </button>
         </header>
 
-        <section class="admin-stats" aria-label="统计概览">
-          <article class="admin-stat-card">
-            <p class="admin-stat-card__label">全部</p>
-            <p class="admin-stat-card__value" id="stat-total">—</p>
-          </article>
-          <article class="admin-stat-card admin-stat-card--active">
-            <p class="admin-stat-card__label">可用</p>
-            <p class="admin-stat-card__value" id="stat-active">—</p>
-          </article>
-          <article class="admin-stat-card admin-stat-card--used">
-            <p class="admin-stat-card__label">已使用</p>
-            <p class="admin-stat-card__value" id="stat-used">—</p>
-          </article>
-          <article class="admin-stat-card admin-stat-card--revoked">
-            <p class="admin-stat-card__label">已作废</p>
-            <p class="admin-stat-card__value" id="stat-revoked">—</p>
-          </article>
+        <section class="admin-view is-active" id="view-codes" data-view="codes">
+          <div class="admin-stats" aria-label="激活码统计">
+            <article class="admin-stat-card">
+              <p class="admin-stat-card__label">全部</p>
+              <p class="admin-stat-card__value" id="stat-total">—</p>
+            </article>
+            <article class="admin-stat-card admin-stat-card--active">
+              <p class="admin-stat-card__label">可用</p>
+              <p class="admin-stat-card__value" id="stat-active">—</p>
+            </article>
+            <article class="admin-stat-card admin-stat-card--used">
+              <p class="admin-stat-card__label">已使用</p>
+              <p class="admin-stat-card__value" id="stat-used">—</p>
+            </article>
+            <article class="admin-stat-card admin-stat-card--revoked">
+              <p class="admin-stat-card__label">已作废</p>
+              <p class="admin-stat-card__value" id="stat-revoked">—</p>
+            </article>
+          </div>
+
+          <div class="admin-content-grid">
+            <section class="admin-panel" id="create-panel">
+              <div class="admin-panel__head">
+                <h2>生成激活码</h2>
+                <p>批量创建客户授权码，明文仅展示一次</p>
+              </div>
+              <div class="admin-form-grid">
+                <label class="admin-field">
+                  <span>数量</span>
+                  <input id="create-count" type="number" min="1" max="100" value="1" />
+                </label>
+                <label class="admin-field">
+                  <span>有效期（天）</span>
+                  <input id="create-expires-days" type="number" min="1" max="3650" placeholder="留空 = 永不过期" />
+                </label>
+                <label class="admin-field admin-field--wide">
+                  <span>备注</span>
+                  <input id="create-label" type="text" maxlength="200" placeholder="客户名 / 批次 / 订单号" />
+                </label>
+              </div>
+              <div class="admin-panel__actions">
+                <button type="button" class="admin-button admin-button--primary" id="create-btn">生成激活码</button>
+              </div>
+              <div id="created-codes" class="admin-created-codes" hidden>
+                <div class="admin-created-codes__head">
+                  <strong>新生成的激活码</strong>
+                  <span class="admin-badge admin-badge--warn">仅显示一次</span>
+                </div>
+                <p class="admin-note">请立即复制或导出，关闭页面后将无法再次查看明文。</p>
+                <pre id="created-codes-text"></pre>
+                <div class="admin-inline-actions">
+                  <button type="button" class="admin-button admin-button--ghost" id="copy-codes-btn">复制全部</button>
+                  <button type="button" class="admin-button admin-button--ghost" id="download-codes-btn">导出 CSV</button>
+                </div>
+              </div>
+              <p class="admin-alert admin-alert--error" id="create-error" hidden role="alert"></p>
+            </section>
+
+            <section class="admin-panel admin-panel--table" id="list-panel">
+              <div class="admin-panel__head admin-panel__head--toolbar">
+                <div>
+                  <h2>激活码列表</h2>
+                  <p id="list-summary">加载中…</p>
+                </div>
+                <div class="admin-toolbar">
+                  <label class="admin-field admin-field--inline">
+                    <span>状态</span>
+                    <select id="list-status">
+                      <option value="">全部</option>
+                      <option value="active">可用</option>
+                      <option value="used">已使用</option>
+                      <option value="revoked">已作废</option>
+                    </select>
+                  </label>
+                  <button type="button" class="admin-button admin-button--ghost" id="refresh-list-btn">刷新</button>
+                </div>
+              </div>
+              <div class="admin-table-wrap">
+                <table class="admin-table">
+                  <thead>
+                    <tr>
+                      <th>ID</th>
+                      <th>状态</th>
+                      <th>备注</th>
+                      <th>用户</th>
+                      <th>过期</th>
+                      <th>使用</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="codes-table-body">
+                    <tr class="admin-table__loading"><td colspan="7">加载中…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="admin-alert admin-alert--error" id="list-error" hidden role="alert"></p>
+            </section>
+          </div>
         </section>
 
-        <div class="admin-content-grid">
-          <section class="admin-panel" id="create-panel">
-            <div class="admin-panel__head">
-              <h2>生成激活码</h2>
-              <p>批量创建客户授权码，明文仅展示一次</p>
-            </div>
-            <div class="admin-form-grid">
-              <label class="admin-field">
-                <span>数量</span>
-                <input id="create-count" type="number" min="1" max="100" value="1" />
-              </label>
-              <label class="admin-field">
-                <span>有效期（天）</span>
-                <input id="create-expires-days" type="number" min="1" max="3650" placeholder="留空 = 永不过期" />
-              </label>
-              <label class="admin-field admin-field--wide">
-                <span>备注</span>
-                <input id="create-label" type="text" maxlength="200" placeholder="客户名 / 批次 / 订单号" />
-              </label>
-            </div>
-            <div class="admin-panel__actions">
-              <button type="button" class="admin-button admin-button--primary" id="create-btn">生成激活码</button>
-            </div>
+        <section class="admin-view" id="view-users" data-view="users" hidden>
+          <div class="admin-stats" aria-label="用户统计">
+            <article class="admin-stat-card">
+              <p class="admin-stat-card__label">全部用户</p>
+              <p class="admin-stat-card__value" id="user-stat-total">—</p>
+            </article>
+            <article class="admin-stat-card admin-stat-card--active">
+              <p class="admin-stat-card__label">正常</p>
+              <p class="admin-stat-card__value" id="user-stat-active">—</p>
+            </article>
+            <article class="admin-stat-card admin-stat-card--revoked">
+              <p class="admin-stat-card__label">已禁用</p>
+              <p class="admin-stat-card__value" id="user-stat-disabled">—</p>
+            </article>
+          </div>
 
-            <div id="created-codes" class="admin-created-codes" hidden>
-              <div class="admin-created-codes__head">
-                <strong>新生成的激活码</strong>
-                <span class="admin-badge admin-badge--warn">仅显示一次</span>
-              </div>
-              <p class="admin-note">请立即复制或导出，关闭页面后将无法再次查看明文。</p>
-              <pre id="created-codes-text"></pre>
-              <div class="admin-inline-actions">
-                <button type="button" class="admin-button admin-button--ghost" id="copy-codes-btn">复制全部</button>
-                <button type="button" class="admin-button admin-button--ghost" id="download-codes-btn">导出 CSV</button>
-              </div>
-            </div>
-            <p class="admin-alert admin-alert--error" id="create-error" hidden role="alert"></p>
-          </section>
-
-          <section class="admin-panel admin-panel--table" id="list-panel">
+          <section class="admin-panel admin-panel--table">
             <div class="admin-panel__head admin-panel__head--toolbar">
               <div>
-                <h2>激活码列表</h2>
-                <p id="list-summary">加载中…</p>
+                <h2>终端用户</h2>
+                <p id="users-list-summary">加载中…</p>
               </div>
               <div class="admin-toolbar">
                 <label class="admin-field admin-field--inline">
-                  <span>状态筛选</span>
-                  <select id="list-status">
-                    <option value="">全部状态</option>
-                    <option value="active">可用</option>
-                    <option value="used">已使用</option>
-                    <option value="revoked">已作废</option>
+                  <span>搜索</span>
+                  <input id="users-search" type="search" placeholder="邮箱 / 昵称 / 手机" />
+                </label>
+                <label class="admin-field admin-field--inline">
+                  <span>类型</span>
+                  <select id="users-type">
+                    <option value="">全部</option>
+                    <option value="email">邮箱</option>
+                    <option value="phone">手机</option>
+                    <option value="activation">激活</option>
                   </select>
                 </label>
-                <button type="button" class="admin-button admin-button--ghost" id="refresh-list-btn">刷新列表</button>
+                <label class="admin-field admin-field--inline">
+                  <span>状态</span>
+                  <select id="users-status">
+                    <option value="">全部</option>
+                    <option value="active">正常</option>
+                    <option value="disabled">已禁用</option>
+                  </select>
+                </label>
+                <button type="button" class="admin-button admin-button--ghost" id="refresh-users-btn">刷新</button>
               </div>
             </div>
-
             <div class="admin-table-wrap">
               <table class="admin-table">
                 <thead>
                   <tr>
-                    <th>ID</th>
+                    <th>昵称</th>
+                    <th>类型</th>
+                    <th>账号</th>
+                    <th>设备</th>
                     <th>状态</th>
-                    <th>备注</th>
-                    <th>过期时间</th>
-                    <th>使用时间</th>
-                    <th>Installation</th>
+                    <th>注册时间</th>
                     <th>操作</th>
                   </tr>
                 </thead>
-                <tbody id="codes-table-body">
-                  <tr class="admin-table__loading">
-                    <td colspan="7">加载中…</td>
-                  </tr>
+                <tbody id="users-table-body">
+                  <tr class="admin-table__loading"><td colspan="7">加载中…</td></tr>
                 </tbody>
               </table>
             </div>
-            <p class="admin-alert admin-alert--error" id="list-error" hidden role="alert"></p>
+            <p class="admin-alert admin-alert--error" id="users-list-error" hidden role="alert"></p>
           </section>
-        </div>
+
+          <section class="admin-panel admin-panel--detail" id="user-detail-panel" hidden>
+            <div class="admin-panel__head admin-panel__head--toolbar">
+              <div>
+                <h2 id="user-detail-title">用户详情</h2>
+                <p id="user-detail-subtitle"></p>
+              </div>
+              <button type="button" class="admin-button admin-button--ghost" id="close-user-detail-btn">关闭</button>
+            </div>
+            <div id="user-detail-content"></div>
+          </section>
+        </section>
+
+        <section class="admin-view" id="view-admins" data-view="admins" hidden>
+          <div class="admin-content-grid admin-content-grid--split">
+            <section class="admin-panel">
+              <div class="admin-panel__head">
+                <h2>新增管理员</h2>
+                <p>密码至少 12 位</p>
+              </div>
+              <form class="admin-form" id="create-admin-form" novalidate>
+                <label class="admin-field">
+                  <span>用户名</span>
+                  <input id="create-admin-username" type="text" placeholder="ops" />
+                  <span class="admin-field__error" id="create-admin-username-error" hidden></span>
+                </label>
+                <label class="admin-field">
+                  <span>显示名</span>
+                  <input id="create-admin-display-name" type="text" placeholder="运维管理员" />
+                  <span class="admin-field__error" id="create-admin-display-name-error" hidden></span>
+                </label>
+                <label class="admin-field">
+                  <span>密码</span>
+                  <input id="create-admin-password" type="password" placeholder="至少 12 位" />
+                  <span class="admin-field__error" id="create-admin-password-error" hidden></span>
+                </label>
+                <button type="submit" class="admin-button admin-button--primary">创建管理员</button>
+              </form>
+              <p class="admin-alert admin-alert--error" id="create-admin-error" hidden role="alert"></p>
+            </section>
+
+            <section class="admin-panel admin-panel--table">
+              <div class="admin-panel__head admin-panel__head--toolbar">
+                <div>
+                  <h2>管理员列表</h2>
+                  <p id="admins-list-summary">加载中…</p>
+                </div>
+                <button type="button" class="admin-button admin-button--ghost" id="refresh-admins-btn">刷新</button>
+              </div>
+              <div class="admin-table-wrap">
+                <table class="admin-table">
+                  <thead>
+                    <tr>
+                      <th>用户名</th>
+                      <th>显示名</th>
+                      <th>状态</th>
+                      <th>创建时间</th>
+                      <th>操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="admins-table-body">
+                    <tr class="admin-table__loading"><td colspan="5">加载中…</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="admin-alert admin-alert--error" id="admins-list-error" hidden role="alert"></p>
+            </section>
+          </div>
+        </section>
       </main>
     </div>
 
     <div class="admin-toast" id="admin-toast" hidden role="status"></div>
-
     <script src="/admin/admin.js" defer></script>
   </body>
 </html>
