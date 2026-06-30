@@ -55,6 +55,7 @@ import {
   type LeaderboardTimePeriod,
   type TokenLeaderboardResponse,
   type WindowPlacement,
+  resolveDefaultCloudServerUrl,
 } from "./tauriClient";
 
 const STORAGE_KEY = "agent-light-config-v1";
@@ -499,7 +500,7 @@ export default function App() {
 
     try {
       const snapshot = await getTokenLeaderboard({
-        serverUrl: session?.server_url ?? "http://127.0.0.1:8787",
+        serverUrl: session?.server_url ?? resolveDefaultCloudServerUrl(),
         accessToken: session?.access_token,
         agentProvider,
         timePeriod,

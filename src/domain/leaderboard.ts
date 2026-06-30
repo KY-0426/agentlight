@@ -1,12 +1,14 @@
 import { agentProviderValues, type AgentProvider } from "@agent-light/shared";
 
-export const DEFAULT_LEADERBOARD_SERVER_URL = "http://127.0.0.1:8787";
+export const DEFAULT_LOCAL_SERVER_URL = "http://127.0.0.1:8787";
 export const DEFAULT_CLOUD_SERVER_URL =
   (import.meta.env.VITE_CLOUD_SERVER_URL as string | undefined)?.trim() ||
   "https://agentlight-276211-9-1310055760.sh.run.tcloudbase.com";
 
+export const DEFAULT_LEADERBOARD_SERVER_URL = DEFAULT_CLOUD_SERVER_URL;
+
 export function resolveDefaultCloudServerUrl(): string {
-  return import.meta.env.DEV ? DEFAULT_LEADERBOARD_SERVER_URL : DEFAULT_CLOUD_SERVER_URL;
+  return DEFAULT_CLOUD_SERVER_URL;
 }
 export const DEFAULT_LEADERBOARD_LIMIT = 20;
 export const DEFAULT_AGENT_PROVIDER: AgentProvider = "codex";

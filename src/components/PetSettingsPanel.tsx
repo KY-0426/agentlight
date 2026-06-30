@@ -22,7 +22,6 @@ import { aiToolAccent, isAiToolId } from "../domain/aiTools";
 import {
   agentProviderLabels,
   agentProviderOrder,
-  DEFAULT_LEADERBOARD_SERVER_URL,
   resolveDefaultCloudServerUrl,
   isDeviceCloudAccount,
   leaderboardTimePeriodLabels,
