@@ -1,11 +1,12 @@
-const STORAGE_KEY = "agent-light-admin-key";
+const STORAGE_KEY = "agent-light-admin-token";
 const origin = window.location.origin.replace(/\/$/, "");
 
 const loginPanel = document.getElementById("login-panel");
 const adminPanel = document.getElementById("admin-panel");
 const loginBtn = document.getElementById("login-btn");
 const logoutBtn = document.getElementById("logout-btn");
-const adminKeyInput = document.getElementById("admin-key-input");
+const adminUsernameInput = document.getElementById("admin-username-input");
+const adminPasswordInput = document.getElementById("admin-password-input");
 const loginError = document.getElementById("login-error");
 const createBtn = document.getElementById("create-btn");
 const createCount = document.getElementById("create-count");
@@ -24,11 +25,11 @@ const listError = document.getElementById("list-error");
 
 let latestCreatedCodes = [];
 
-function getAdminKey() {
+function getAdminToken() {
   return sessionStorage.getItem(STORAGE_KEY) ?? "";
 }
 
-function setAdminKey(value) {
+function setAdminToken(value) {
   if (value) {
     sessionStorage.setItem(STORAGE_KEY, value);
   } else {
@@ -53,13 +54,13 @@ function showPanel(loggedIn) {
 }
 
 async function apiFetch(path, options = {}) {
-  const adminKey = getAdminKey();
+  const adminToken = getAdminToken();
   const response = await fetch(`${origin}${path}`, {
     ...options,
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      Authorization: `Bearer ${adminKey}`,
+      Authorization: `Bearer ${adminToken}`,
       ...(options.headers ?? {}),
     },
   });
@@ -158,26 +159,54 @@ async function revokeCode(id) {
   await refreshList();
 }
 
-loginBtn?.addEventListener("click", async () => {
+async function login() {
   hideLoginError();
-  const key = adminKeyInput.value.trim();
-  if (!key) {
-    showLoginError("请输入 Admin Key");
+  const username = adminUsernameInput.value.trim();
+  const password = adminPasswordInput.value;
+  if (!username || !password) {
+    showLoginError("请输入账号和密码");
     return;
   }
 
-  setAdminKey(key);
+  loginBtn.disabled = true;
   try {
+    const response = await fetch(`${origin}/api/admin/login`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ username, password }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.error?.message ?? "登录失败");
+    }
+
+    setAdminToken(payload.data.access_token);
+    adminPasswordInput.value = "";
     await refreshList();
     showPanel(true);
   } catch (error) {
-    setAdminKey("");
+    setAdminToken("");
     showLoginError(error instanceof Error ? error.message : "登录失败");
+  } finally {
+    loginBtn.disabled = false;
+  }
+}
+
+loginBtn?.addEventListener("click", () => {
+  void login();
+});
+
+adminPasswordInput?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    void login();
   }
 });
 
 logoutBtn?.addEventListener("click", () => {
-  setAdminKey("");
+  setAdminToken("");
   showPanel(false);
 });
 
@@ -238,12 +267,11 @@ codesTableBody?.addEventListener("click", (event) => {
   });
 });
 
-if (getAdminKey()) {
-  adminKeyInput.value = getAdminKey();
+if (getAdminToken()) {
   void refreshList()
     .then(() => showPanel(true))
     .catch(() => {
-      setAdminKey("");
+      setAdminToken("");
       showPanel(false);
     });
 } else {

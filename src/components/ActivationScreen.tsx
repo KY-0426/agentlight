@@ -7,7 +7,6 @@ interface ActivationScreenProps {
 }
 
 export function ActivationScreen({ onActivated }: ActivationScreenProps) {
-  const [serverUrl, setServerUrl] = useState(resolveDefaultCloudServerUrl);
   const [activationCode, setActivationCode] = useState("");
   const [status, setStatus] = useState<"idle" | "submitting" | "error">("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -23,7 +22,7 @@ export function ActivationScreen({ onActivated }: ActivationScreenProps) {
     setStatus("submitting");
     setErrorMessage(null);
     try {
-      await activateClient(serverUrl, activationCode);
+      await activateClient(resolveDefaultCloudServerUrl(), activationCode);
       setStatus("idle");
       onActivated();
     } catch (error) {
@@ -41,18 +40,6 @@ export function ActivationScreen({ onActivated }: ActivationScreenProps) {
           首次使用请输入客户激活码。激活成功后本机可离线使用桌宠、本地 API 与 CLI。
         </p>
         <form className="activation-form" onSubmit={(event) => void submit(event)}>
-          <label className="activation-field">
-            <span>服务端地址</span>
-            <input
-              type="url"
-              value={serverUrl}
-              onChange={(event) => setServerUrl(event.target.value)}
-              placeholder={resolveDefaultCloudServerUrl()}
-              autoComplete="url"
-              spellCheck={false}
-              required
-            />
-          </label>
           <label className="activation-field">
             <span>客户激活码</span>
             <input
@@ -97,7 +84,7 @@ function formatActivationError(error: unknown): string {
       return "激活码已过期";
     }
     if (message.includes("Could not reach") || message.includes("activation_request_failed")) {
-      return "无法连接激活服务器，请检查网络和服务端地址";
+      return "无法连接激活服务器，请检查网络后重试";
     }
     return message || "激活失败，请稍后重试";
   }

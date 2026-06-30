@@ -1,8 +1,15 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { ServerEnv } from "../config/env";
 import { sendError } from "../auth/http";
+import type { AdminRepository } from "./repository";
+import { verifyAdminAccessToken } from "./tokens";
 
-export function authenticateAdmin(request: FastifyRequest, reply: FastifyReply, env: ServerEnv): boolean {
+export async function authenticateAdmin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  env: ServerEnv,
+  adminRepository: AdminRepository,
+): Promise<boolean> {
   const header = request.headers.authorization;
   if (typeof header !== "string" || !header.startsWith("Bearer ")) {
     sendError(reply, 401, "admin_unauthorized", "Admin authorization required");
@@ -10,7 +17,14 @@ export function authenticateAdmin(request: FastifyRequest, reply: FastifyReply, 
   }
 
   const token = header.slice("Bearer ".length).trim();
-  if (!env.adminApiKey || token !== env.adminApiKey) {
+  const payload = verifyAdminAccessToken(token, env.accessTokenSecret);
+  if (!payload) {
+    sendError(reply, 401, "admin_unauthorized", "Admin authorization required");
+    return false;
+  }
+
+  const admin = await adminRepository.findAdminById(payload.sub);
+  if (!admin || admin.disabledAt) {
     sendError(reply, 401, "admin_unauthorized", "Admin authorization required");
     return false;
   }

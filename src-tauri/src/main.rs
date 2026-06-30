@@ -1321,6 +1321,48 @@ fn list_ai_tool_token_usages() -> Result<Vec<ai_tools::AiToolTokenUsage>, Comman
     ai_tools::list_ai_tool_token_usages()
 }
 
+fn reveal_main_app(app: &AppHandle) -> Result<(), CommandError> {
+    if let Some(activation_window) = app.get_webview_window("activation") {
+        activation_window.hide().map_err(|error| CommandError {
+            code: "activation_window_hide_failed",
+            message: format!("Could not hide activation window: {error}"),
+        })?;
+    }
+
+    let main_window = get_main_window(app)?;
+    main_window.show().map_err(|error| CommandError {
+        code: "main_window_show_failed",
+        message: format!("Could not show main window: {error}"),
+    })?;
+    main_window.set_focus().map_err(|error| CommandError {
+        code: "main_window_focus_failed",
+        message: format!("Could not focus main window: {error}"),
+    })?;
+
+    Ok(())
+}
+
+fn sync_activation_windows(app: &AppHandle) {
+    let activated = activation::is_client_activated().unwrap_or(false);
+
+    if let Some(main_window) = app.get_webview_window("main") {
+        if activated {
+            let _ = main_window.show();
+        } else {
+            let _ = main_window.hide();
+        }
+    }
+
+    if let Some(activation_window) = app.get_webview_window("activation") {
+        if activated {
+            let _ = activation_window.hide();
+        } else {
+            let _ = activation_window.show();
+            let _ = activation_window.set_focus();
+        }
+    }
+}
+
 #[tauri::command]
 fn activate_client(
     app: AppHandle,
@@ -1330,6 +1372,7 @@ fn activate_client(
 ) -> Result<activation::ActivationRecord, CommandError> {
     let record = activation::activate_client(server_url, activation_code)?;
     ensure_runtime_services(&runtime, &app);
+    reveal_main_app(&app)?;
     Ok(record)
 }
 
@@ -1392,9 +1435,18 @@ fn main() {
             if activation::is_client_activated().unwrap_or(false) {
                 ensure_runtime_services(&runtime, app.handle());
             }
+            sync_activation_windows(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "activation" {
+                if let WindowEvent::CloseRequested { .. } = event {
+                    if !activation::is_client_activated().unwrap_or(false) {
+                        window.app_handle().exit(0);
+                    }
+                }
+            }
+
             if window.label() != "settings" {
                 return;
             }

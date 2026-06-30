@@ -2,7 +2,6 @@ import { z } from "zod";
 
 const devAccessTokenSecret = "dev-access-token-secret-change-before-production";
 const devRefreshTokenSecret = "dev-refresh-token-secret-change-before-production";
-const devAdminApiKey = "dev-admin-api-key-change-before-production";
 const devActivationSigningSecret = "dev-activation-signing-secret-change-before-production";
 
 const rawEnvSchema = z
@@ -17,7 +16,6 @@ const rawEnvSchema = z
       .default("postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light"),
     ACCESS_TOKEN_SECRET: z.string().min(32).optional(),
     REFRESH_TOKEN_SECRET: z.string().min(32).optional(),
-    ADMIN_API_KEY: z.string().min(16).optional(),
     ACTIVATION_SIGNING_SECRET: z.string().min(32).optional(),
   })
   .superRefine((env, context) => {
@@ -41,14 +39,6 @@ const rawEnvSchema = z
       });
     }
 
-    if (!env.ADMIN_API_KEY) {
-      context.addIssue({
-        code: "custom",
-        path: ["ADMIN_API_KEY"],
-        message: "ADMIN_API_KEY is required in production",
-      });
-    }
-
     if (!env.ACTIVATION_SIGNING_SECRET) {
       context.addIssue({
         code: "custom",
@@ -66,7 +56,6 @@ export type ServerEnv = {
   databaseUrl: string;
   accessTokenSecret: string;
   refreshTokenSecret: string;
-  adminApiKey: string;
   activationSigningSecret: string;
 };
 
@@ -81,7 +70,6 @@ export function loadEnv(input: NodeJS.ProcessEnv = process.env): ServerEnv {
     databaseUrl: env.DATABASE_URL,
     accessTokenSecret: env.ACCESS_TOKEN_SECRET ?? devAccessTokenSecret,
     refreshTokenSecret: env.REFRESH_TOKEN_SECRET ?? devRefreshTokenSecret,
-    adminApiKey: env.ADMIN_API_KEY ?? devAdminApiKey,
     activationSigningSecret: env.ACTIVATION_SIGNING_SECRET ?? devActivationSigningSecret,
   };
 }

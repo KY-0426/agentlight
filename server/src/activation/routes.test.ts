@@ -10,7 +10,6 @@ const testEnv = {
   DATABASE_URL: "postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light",
   ACCESS_TOKEN_SECRET: "a".repeat(32),
   REFRESH_TOKEN_SECRET: "b".repeat(32),
-  ADMIN_API_KEY: "test-admin-key-123456",
   ACTIVATION_SIGNING_SECRET: "c".repeat(32),
 };
 

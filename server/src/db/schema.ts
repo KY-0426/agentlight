@@ -284,3 +284,18 @@ export const refreshTokens = pgTable(
     userIdx: index("refresh_tokens_user_idx").on(table.userId),
   }),
 );
+
+export const adminUsers = pgTable(
+  "admin_users",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    username: varchar("username", { length: 64 }).notNull(),
+    passwordHash: text("password_hash").notNull(),
+    displayName: varchar("display_name", { length: 120 }).notNull(),
+    disabledAt: timestamp("disabled_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => ({
+    usernameUnique: uniqueIndex("admin_users_username_unique").on(sql`lower(${table.username})`),
+  }),
+);

@@ -12,17 +12,21 @@ import { registerAuthRoutes } from "./auth/routes";
 import { registerMvpRoutes } from "./api/routes";
 import { registerActivationRoutes } from "./activation/routes";
 import { registerAdminRoutes } from "./admin/routes";
+import { DrizzleAdminRepository, InMemoryAdminRepository, type AdminRepository } from "./admin/repository";
 import { registerWebsite } from "./website/register";
 
 export type BuildAppOptions = {
   env?: NodeJS.ProcessEnv;
   authRepository?: AuthRepository;
+  adminRepository?: AdminRepository;
 };
 
 export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyInstance> {
   const env = loadEnv(options.env);
   const dbClient = options.authRepository ? undefined : createDb(env);
   const authRepository = options.authRepository ?? new DrizzleAuthRepository(dbClient!.db);
+  const adminRepository =
+    options.adminRepository ?? (dbClient ? new DrizzleAdminRepository(dbClient.db) : new InMemoryAdminRepository());
   const app = Fastify({
     logger: buildLoggerOptions(env),
   });
@@ -62,7 +66,7 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await registerAuthRoutes(app, { env, repository: authRepository });
   await registerMvpRoutes(app, { env, repository: authRepository });
   await registerActivationRoutes(app, { env, repository: authRepository });
-  await registerAdminRoutes(app, { env, repository: authRepository });
+  await registerAdminRoutes(app, { env, repository: authRepository, adminRepository });
   await registerWebsite(app);
 
   return app;

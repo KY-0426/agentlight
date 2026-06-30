@@ -111,7 +111,6 @@ describe("server app", () => {
       databaseUrl: "postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light",
       accessTokenSecret: "a".repeat(32),
       refreshTokenSecret: "b".repeat(32),
-      adminApiKey: "c".repeat(16),
       activationSigningSecret: "d".repeat(32),
     });
 

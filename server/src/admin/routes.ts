@@ -1,26 +1,53 @@
 import type { FastifyInstance } from "fastify";
 import {
   activationCodeDtoSchema,
+  adminLoginRequestSchema,
+  adminLoginResponseSchema,
   createActivationCodesRequestSchema,
   createActivationCodesResponseSchema,
   listActivationCodesQuerySchema,
   listActivationCodesResponseSchema,
 } from "@agent-light/shared";
 import { sendError } from "../auth/http";
+import { verifyPassword } from "../auth/crypto";
 import { AuthRepositoryError, type ActivationCodeRecord, type AuthRepository } from "../auth/repository";
 import type { ServerEnv } from "../config/env";
 import { authenticateAdmin } from "./auth";
+import type { AdminRepository } from "./repository";
+import { issueAdminAccessToken } from "./tokens";
 
 export type AdminRoutesOptions = {
   env: ServerEnv;
   repository: AuthRepository;
+  adminRepository: AdminRepository;
 };
 
 export async function registerAdminRoutes(app: FastifyInstance, options: AdminRoutesOptions): Promise<void> {
-  const { env, repository } = options;
+  const { env, repository, adminRepository } = options;
+
+  app.post("/api/admin/login", async (request, reply) => {
+    const parsed = adminLoginRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return sendError(reply, 400, "validation_failed", "Invalid admin login payload");
+    }
+
+    const admin = await adminRepository.findAdminByUsername(parsed.data.username);
+    if (!admin || admin.disabledAt || !(await verifyPassword(parsed.data.password, admin.passwordHash))) {
+      return sendError(reply, 401, "admin_unauthorized", "Invalid username or password");
+    }
+
+    const token = issueAdminAccessToken(admin.id, env);
+    const response = adminLoginResponseSchema.parse({
+      ...token,
+      username: admin.username,
+      display_name: admin.displayName,
+    });
+
+    return reply.send({ ok: true, data: response });
+  });
 
   app.post("/api/admin/activation-codes", async (request, reply) => {
-    if (!authenticateAdmin(request, reply, env)) {
+    if (!(await authenticateAdmin(request, reply, env, adminRepository))) {
       return reply;
     }
 
@@ -48,7 +75,7 @@ export async function registerAdminRoutes(app: FastifyInstance, options: AdminRo
   });
 
   app.get("/api/admin/activation-codes", async (request, reply) => {
-    if (!authenticateAdmin(request, reply, env)) {
+    if (!(await authenticateAdmin(request, reply, env, adminRepository))) {
       return reply;
     }
 
@@ -67,7 +94,7 @@ export async function registerAdminRoutes(app: FastifyInstance, options: AdminRo
   });
 
   app.post("/api/admin/activation-codes/:id/revoke", async (request, reply) => {
-    if (!authenticateAdmin(request, reply, env)) {
+    if (!(await authenticateAdmin(request, reply, env, adminRepository))) {
       return reply;
     }
 

@@ -133,6 +133,22 @@ export const loginRequestSchema = z.object({
 }).strict();
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
 
+export const adminUsernameSchema = z.string().trim().min(2).max(64).regex(/^[A-Za-z0-9_.-]+$/);
+
+export const adminLoginRequestSchema = z.object({
+  username: adminUsernameSchema,
+  password: z.string().min(1).max(128),
+}).strict();
+export type AdminLoginRequest = z.infer<typeof adminLoginRequestSchema>;
+
+export const adminLoginResponseSchema = z.object({
+  access_token: z.string().min(32),
+  expires_in_seconds: z.number().int().positive(),
+  username: adminUsernameSchema,
+  display_name: z.string().min(1).max(120),
+});
+export type AdminLoginResponse = z.infer<typeof adminLoginResponseSchema>;
+
 export const refreshRequestSchema = z.object({
   refresh_token: z.string().min(32).max(512),
 }).strict();

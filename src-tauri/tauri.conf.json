@@ -27,7 +27,23 @@
         "transparent": true,
         "alwaysOnTop": true,
         "skipTaskbar": true,
-        "shadow": false
+        "shadow": false,
+        "visible": false
+      },
+      {
+        "label": "activation",
+        "title": "激活 Agent Light",
+        "url": "index.html?view=activation",
+        "width": 480,
+        "height": 560,
+        "center": true,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": true,
+        "transparent": false,
+        "alwaysOnTop": false,
+        "skipTaskbar": false,
+        "shadow": true
       },
       {
         "label": "settings",

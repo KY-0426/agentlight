@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { AgentPet } from "./components/AgentPet";
-import { ActivationScreen } from "./components/ActivationScreen";
 import { HardwareDebugPanel } from "./components/HardwareDebugPanel";
 import { PetSettingsPanel } from "./components/PetSettingsPanel";
 import { useGuardedClick } from "./hooks/useGuardedClick";
+import { getAppView, getShellView } from "./appView";
 import type { AiToolTokenUsage } from "./domain/aiTools";
 import {
   type AgentState,
@@ -23,7 +23,6 @@ import {
   getTokenLeaderboard,
   getSystemMetrics,
   getStatus,
-  getActivationStatus,
   getWindowLabel,
   getMainWindowPlacement,
   isTauriRuntime,
@@ -114,10 +113,7 @@ function cloudSessionMessage(session: CloudSession): string {
 }
 
 export default function App() {
-  const [clientActivated, setClientActivated] = useState<boolean | null>(() =>
-    isTauriRuntime() ? null : true,
-  );
-  const [view, setView] = useState<"main" | "settings" | "hardware-dev">(() => getInitialView());
+  const [view, setView] = useState<"main" | "settings" | "hardware-dev">(() => getShellView());
   const [config, setConfig] = useState<StoredConfig>(() => loadConfig());
   const [event, setEvent] = useState<AgentStatusEvent>(() =>
     createStatusEvent("standby", "待命中", "boot"),
@@ -151,17 +147,6 @@ export default function App() {
   const leaderboardTimePeriodRef = useRef<LeaderboardTimePeriod>("total");
   const lastUsageUploadKeyRef = useRef<Partial<Record<AgentProvider, string>>>({});
   const windowLabelRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!isTauriRuntime()) {
-      setClientActivated(true);
-      return;
-    }
-
-    getActivationStatus()
-      .then(setClientActivated)
-      .catch(() => setClientActivated(false));
-  }, []);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -256,7 +241,7 @@ export default function App() {
       windowLabelRef.current = label;
       const isSettingsWindow = label === "settings";
 
-      if (isSettingsWindow && getInitialView() !== "hardware-dev") {
+      if (isSettingsWindow && getAppView() !== "hardware-dev") {
         setView("settings");
       }
 
@@ -649,14 +634,6 @@ export default function App() {
   const openSettingsClick = useGuardedClick(openPetSettings);
   const acknowledgeClick = useGuardedClick(acknowledgeCompleted);
 
-  if (clientActivated === null) {
-    return <main className="activation-screen activation-screen--loading" aria-busy="true" />;
-  }
-
-  if (!clientActivated) {
-    return <ActivationScreen onActivated={() => setClientActivated(true)} />;
-  }
-
   if (view === "settings") {
     return (
       <PetSettingsPanel
@@ -726,12 +703,4 @@ export default function App() {
       </section>
     </main>
   );
-}
-
-function getInitialView(): "main" | "settings" | "hardware-dev" {
-  const params = new URLSearchParams(window.location.search);
-  if (params.get("view") === "hardware-dev" && params.get("dev") === "hardware") {
-    return "hardware-dev";
-  }
-  return params.get("view") === "settings" ? "settings" : "main";
 }

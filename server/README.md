@@ -14,7 +14,8 @@ Agent Light 多用户软件 MVP 的 Fastify 服务端。
 - `GET /api/me`
 - `POST /api/devices/bootstrap`，安装时自动创建设备账户（无需登录），重复调用幂等返回同一用户
 - `POST /api/activation/activate`，桌面客户端激活（消耗客户激活码并返回签名凭证）
-- `GET /api/admin/activation-codes` / `POST /api/admin/activation-codes` / `POST /api/admin/activation-codes/:id/revoke`（需 `ADMIN_API_KEY`）
+- `POST /api/admin/login`，管理员账号密码登录
+- `GET /api/admin/activation-codes` / `POST /api/admin/activation-codes` / `POST /api/admin/activation-codes/:id/revoke`（需管理员登录 token）
 - `/admin/` 管理后台：生成、列表、作废客户激活码
 - `POST /api/devices/register`（需登录，用于手机号账户绑定设备）
 - `POST /api/hardware-devices/bind`
@@ -61,4 +62,5 @@ npm run db:setup
 - 本地单元测试使用内存仓储；真实 PostgreSQL migration 执行和数据库集成测试仍需单独跑。
 - 桌面端启动时自动调用 bootstrap，无需登录即可上报 token 并上榜；手机号绑定与多设备合并即将推出
 - Win/Mac 桌面端首次启动需客户激活码；激活成功后本地持久化，可离线使用
-- 管理端通过 `/admin/` 生成激活码；生产环境需配置 `ADMIN_API_KEY` 与 `ACTIVATION_SIGNING_SECRET`
+- 管理端通过 `/admin/` 生成激活码；默认管理员账号 `admin`，默认密码 `AgentLight@Admin2026`（迁移 `0007_admin_users` 写入，上线后请尽快修改）
+- 生产环境需配置 `ACTIVATION_SIGNING_SECRET`
