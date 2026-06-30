@@ -12,6 +12,8 @@ import {
   leaderboardTokensQuerySchema,
   listAdminEndUsersQuerySchema,
   normalizeAgentStatus,
+  formatTokenCount,
+  isDeviceOnline,
   sendPhoneVerificationCodeRequestSchema,
   verifyPhoneLoginRequestSchema,
   updateProfileRequestSchema,
@@ -31,6 +33,20 @@ describe("shared schemas", () => {
     expect(sanitizeDisplayMessage("  hello\n\tworld  ")).toBe("hello world");
     expect(sanitizeDisplayMessage("   ")).toBeNull();
     expect(sanitizeDisplayMessage("abcdef", 3)).toBe("abc");
+  });
+
+  it("formats token counts with 万/亿 units", () => {
+    expect(formatTokenCount(999)).toBe("999");
+    expect(formatTokenCount(12_500)).toBe("1.3万");
+    expect(formatTokenCount(100_000_000)).toBe("1亿");
+    expect(formatTokenCount(null)).toBe("--");
+  });
+
+  it("detects online devices from lastSeenAt", () => {
+    const now = Date.now();
+    expect(isDeviceOnline(new Date(now - 60_000), now)).toBe(true);
+    expect(isDeviceOnline(new Date(now - 10 * 60_000), now)).toBe(false);
+    expect(isDeviceOnline(null, now)).toBe(false);
   });
 
   it("accepts invite registration shape", () => {

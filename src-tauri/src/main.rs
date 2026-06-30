@@ -614,6 +614,7 @@ impl HardwareRuntime {
             .lock()
             .map(|mut inner| {
                 inner.light_settings = settings;
+                inner.last_state = None;
                 inner.updated_at_ms = timestamp_ms();
             })
             .map_err(|_| CommandError {
@@ -1317,6 +1318,11 @@ fn install_ai_tool(tool_id: String) -> Result<ai_tools::AiToolInstallResult, Com
 }
 
 #[tauri::command]
+fn sync_ai_tool_connectors(force: bool) -> Result<ai_tools::AiToolSyncResult, CommandError> {
+    ai_tools::sync_missing_ai_tool_connectors(force)
+}
+
+#[tauri::command]
 fn list_ai_tool_token_usages() -> Result<Vec<ai_tools::AiToolTokenUsage>, CommandError> {
     ai_tools::list_ai_tool_token_usages()
 }
@@ -1423,6 +1429,7 @@ fn main() {
             clear_cloud_session,
             list_ai_tools,
             install_ai_tool,
+            sync_ai_tool_connectors,
             list_ai_tool_token_usages,
             activation::get_activation_status,
             activate_client,
@@ -2250,9 +2257,10 @@ mod tests {
     use super::{
         classify_codex_thread_activity, choose_serial_port, hardware_frame_for_status,
         AgentStatus, parse_hardware_serial_reply, CodexThreadActivity, HardwareFrame,
-        HardwareRuntimeInner, LightSettings, LightStateSettings, StatusSnapshot,
+        HardwareRuntime, HardwareRuntimeInner, LightSettings, LightStateSettings, StatusSnapshot,
         HARDWARE_BAUD_DEFAULT, HARDWARE_PROTOCOL,
     };
+    use std::sync::{Arc, Mutex};
 
     const NO_PORTS: &[String] = &[];
 
@@ -2388,6 +2396,36 @@ mod tests {
                 mode: "breathe",
             }
         );
+    }
+
+    #[test]
+    fn set_light_settings_clears_last_state_for_rewrite() {
+        let runtime = HardwareRuntime {
+            inner: Arc::new(Mutex::new(HardwareRuntimeInner {
+                enabled: true,
+                explicit_port: Some("/dev/cu.fake".to_string()),
+                baud: HARDWARE_BAUD_DEFAULT,
+                light_settings: LightSettings::default(),
+                port: Some("/dev/cu.fake".to_string()),
+                connected: true,
+                firmware_version: Some("1.0".to_string()),
+                protocol_version: Some(HARDWARE_PROTOCOL.to_string()),
+                hardware_revision: Some("dev".to_string()),
+                last_state: Some(AgentStatus::Standby),
+                last_error: None,
+                updated_at_ms: 0,
+            })),
+        };
+
+        let mut settings = LightSettings::default();
+        settings.standby.red = 255;
+
+        runtime
+            .set_light_settings(settings)
+            .expect("set light settings");
+
+        let snapshot = runtime.snapshot().expect("snapshot");
+        assert_eq!(snapshot.last_state, None);
     }
 
     #[test]

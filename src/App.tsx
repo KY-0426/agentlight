@@ -18,6 +18,7 @@ import {
   getCodexStatus,
   getCursorStatus,
   listAiToolTokenUsages,
+  syncAiToolConnectors,
   getHardwareStatus,
   probeHardware,
   getTokenLeaderboard,
@@ -66,6 +67,7 @@ const AGENT_STATUS_REFRESH_MS = 15_000;
 const SYSTEM_METRICS_REFRESH_MS = 30_000;
 const MAIN_PLACEMENT_REFRESH_MS = 10_000;
 const HARDWARE_REFRESH_MS = 30_000;
+const AI_TOOL_SYNC_INTERVAL_MS = 5 * 60_000;
 
 interface StoredConfig {
   alwaysOnTop: boolean;
@@ -196,6 +198,14 @@ export default function App() {
     let agentStatusTimer: number | undefined;
     let hardwareTimer: number | undefined;
     let leaderboardTimer: number | undefined;
+    let aiToolSyncTimer: number | undefined;
+
+    const refreshAiToolConnectors = () => {
+      if (!isTauriRuntime()) {
+        return;
+      }
+      void syncAiToolConnectors().catch(() => undefined);
+    };
 
     const clearTimers = () => {
       if (placementTimer !== undefined) {
@@ -213,6 +223,14 @@ export default function App() {
       if (leaderboardTimer !== undefined) {
         window.clearInterval(leaderboardTimer);
       }
+      if (aiToolSyncTimer !== undefined) {
+        window.clearInterval(aiToolSyncTimer);
+      }
+    };
+
+    const startAiToolSyncTimers = () => {
+      refreshAiToolConnectors();
+      aiToolSyncTimer = window.setInterval(refreshAiToolConnectors, AI_TOOL_SYNC_INTERVAL_MS);
     };
 
     const startSettingsTimers = () => {
@@ -233,6 +251,7 @@ export default function App() {
       leaderboardTimer = window.setInterval(() => {
         void refreshTokenLeaderboard();
       }, 60_000);
+      startAiToolSyncTimers();
     };
 
     const bootstrap = async () => {
@@ -281,6 +300,7 @@ export default function App() {
         placementTimer = window.setInterval(() => {
           void refreshPlacement();
         }, MAIN_PLACEMENT_REFRESH_MS);
+        startAiToolSyncTimers();
       } else {
         startSettingsTimers();
         const onVisibilityChange = () => {
@@ -289,6 +309,7 @@ export default function App() {
           agentStatusTimer = undefined;
           hardwareTimer = undefined;
           leaderboardTimer = undefined;
+          aiToolSyncTimer = undefined;
           if (!document.hidden) {
             startSettingsTimers();
           }

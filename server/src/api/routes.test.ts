@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEVICE_ONLINE_THRESHOLD_MS } from "@agent-light/shared";
 import { buildApp } from "../app";
 import { InMemoryAuthRepository } from "../auth/in-memory-repository";
 
@@ -361,6 +362,11 @@ describe("mvp api routes", () => {
       },
     });
 
+    repository.setDeviceLastSeenAt(
+      "install-macos-second",
+      new Date(Date.now() - DEVICE_ONLINE_THRESHOLD_MS - 60_000),
+    );
+
     const leaderboard = await app.inject({
       method: "GET",
       url: "/api/leaderboards/tokens",
@@ -383,21 +389,15 @@ describe("mvp api routes", () => {
       scope: "global",
       workspace_id: null,
       agent_provider: "codex",
-      total_tokens: 350,
+      total_tokens: 100,
       current_user_rank: null,
     });
     expect(leaderboard.json().data.entries).toEqual([
       {
-        user_id: secondUser.user.id,
-        display_name: "second",
-        tokens_used: 250,
-        rank: 1,
-      },
-      {
         user_id: firstUser.user.id,
         display_name: "first",
         tokens_used: 100,
-        rank: 2,
+        rank: 1,
       },
     ]);
     expect(unauthorizedWrite.statusCode).toBe(401);

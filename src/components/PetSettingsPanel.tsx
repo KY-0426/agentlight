@@ -1,4 +1,5 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { formatTokenCount } from "@agent-light/shared";
 import { useGuardedClick } from "../hooks/useGuardedClick";
 import type { AgentState, AgentStatusEvent } from "../domain/status";
 import type { LightSettings } from "../domain/status";
@@ -931,12 +932,12 @@ function LeaderboardPanel({
           <div className="leaderboard-hero__rank">
             <span>我的排名</span>
             <strong>{data?.current_user_rank ? `#${data.current_user_rank}` : "—"}</strong>
-            <small>{selfEntry ? `用量 ${formatTokens(selfEntry.tokens_used)}` : "登录并同步后可显示个人排名"}</small>
+            <small>{selfEntry ? `用量 ${formatTokenCount(selfEntry.tokens_used)}` : "登录并同步后可显示个人排名"}</small>
           </div>
           <div className="leaderboard-hero__stats">
             <article>
               <span>{timePeriod === "total" ? "榜单累计" : "区间累计"}</span>
-              <strong>{data ? formatTokens(data.total_tokens) : "—"}</strong>
+              <strong>{data ? formatTokenCount(data.total_tokens) : "—"}</strong>
             </article>
             <article>
               <span>上榜人数</span>
@@ -1039,7 +1040,7 @@ function LeaderboardPanel({
                       </span>
                     </div>
                     <div className="leaderboard-row__usage" role="cell">
-                      <strong>{formatTokens(entry.tokens_used)}</strong>
+                      <strong>{formatTokenCount(entry.tokens_used)}</strong>
                       <div className="leaderboard-row__bar" aria-hidden="true">
                         <span style={{ width: `${usageRatio}%`, backgroundColor: accent }} />
                       </div>
@@ -1308,19 +1309,6 @@ function formatLeaderboardRank(rank: number): string {
     return "3";
   }
   return `#${rank}`;
-}
-
-function formatTokens(value: number | null | undefined): string {
-  if (typeof value !== "number") {
-    return "--";
-  }
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}M`;
-  }
-  if (value >= 1_000) {
-    return `${Math.round(value / 1_000)}K`;
-  }
-  return `${value}`;
 }
 
 function formatWorkspaceId(value: string): string {

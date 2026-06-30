@@ -27,6 +27,11 @@ export interface AiToolInstallResult {
   message: string;
 }
 
+export interface AiToolSyncResult {
+  restored: AiToolInstallResult[];
+  skipped_debounce: boolean;
+}
+
 export type AiToolTokenKind = "official" | "estimated" | "pending" | "none";
 
 export interface AiToolTokenUsage {

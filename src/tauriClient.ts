@@ -25,6 +25,7 @@ import type {
   AiToolId,
   AiToolInstallResult,
   AiToolStatus,
+  AiToolSyncResult,
   AiToolTokenUsage,
 } from "./domain/aiTools";
 
@@ -537,6 +538,14 @@ export async function installAiTool(toolId: AiToolId): Promise<AiToolInstallResu
   }
 
   return invoke<AiToolInstallResult>("install_ai_tool", { toolId });
+}
+
+export async function syncAiToolConnectors(force = false): Promise<AiToolSyncResult> {
+  if (!isTauriRuntime()) {
+    return { restored: [], skipped_debounce: false };
+  }
+
+  return invoke<AiToolSyncResult>("sync_ai_tool_connectors", { force });
 }
 
 export async function listAiToolTokenUsages(): Promise<AiToolTokenUsage[]> {

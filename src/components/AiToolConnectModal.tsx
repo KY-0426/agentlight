@@ -129,7 +129,7 @@ export function AiToolConnectModal({ open, onClose, onToolsChanged }: AiToolConn
           </ul>
 
           <p className="ai-tool-modal__footnote">
-            「已安装」表示 Agent Light 已写入接入配置；Cursor 接入后需新开一个对话 hooks 才会生效。再次安装只会更新或修复配置，本向导只装不卸。
+            「已安装」表示 Agent Light 已写入接入配置；检测到本机已安装但配置缺失时会自动恢复。Cursor 接入后需新开一个对话 hooks 才会生效。再次安装只会更新或修复配置，本向导只装不卸。
           </p>
 
           {feedback ? (

@@ -1,5 +1,6 @@
 import type { AiToolTokenUsage } from "../domain/aiTools";
 import { aiToolAccent, aiToolInitials } from "../domain/aiTools";
+import { formatTokenCount } from "@agent-light/shared";
 
 interface AiToolTokenOverviewProps {
   tools: AiToolTokenUsage[];
@@ -26,7 +27,7 @@ export function AiToolTokenOverview({
           <h2 id="ai-tool-token-heading">AI 助手</h2>
           <p className="settings-section__hint">
             {tools.length > 0
-              ? `已连接 ${trackedCount} 个 · 本机累计 ${formatTokens(trackedTotal)}`
+              ? `已连接 ${trackedCount} 个 · 本机累计 ${formatTokenCount(trackedTotal)}`
               : "连接 AI 编程助手后，桌宠会跟随工作状态变化"}
           </p>
         </div>
@@ -75,7 +76,7 @@ export function AiToolTokenOverview({
               {tool.state_label}
             </span>
             <span className="ai-tool-token-row__tokens" role="cell">
-              <strong>{formatTokens(tool.tokens_used)}</strong>
+              <strong>{formatTokenCount(tool.tokens_used)}</strong>
               <small>{formatTokenKind(tool.token_kind)}</small>
             </span>
             <span className="ai-tool-token-row__detail" role="cell">
@@ -109,17 +110,4 @@ function formatTokenKind(kind: AiToolTokenUsage["token_kind"]): string {
     return "即将支持";
   }
   return "暂无数据";
-}
-
-function formatTokens(value: number | null | undefined): string {
-  if (typeof value !== "number") {
-    return "—";
-  }
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}M`;
-  }
-  if (value >= 1_000) {
-    return `${Math.round(value / 1_000)}K`;
-  }
-  return `${value}`;
 }

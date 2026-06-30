@@ -1,6 +1,7 @@
-import { and, desc, eq, gt, gte, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, exists, gt, gte, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { AgentProvider, ApiErrorCode, DesktopPlatform, WorkspaceRole } from "@agent-light/shared";
+import { DEVICE_ONLINE_THRESHOLD_MS } from "@agent-light/shared";
 import * as schema from "../db/schema";
 import { createOpaqueToken, hashOpaqueValue } from "./crypto";
 
@@ -53,6 +54,7 @@ export type DeviceRecord = {
   platform: DesktopPlatform;
   appVersion: string;
   deviceLabel: string | null;
+  lastSeenAt: Date | null;
   createdAt: Date;
 };
 
@@ -845,7 +847,7 @@ export class DrizzleAuthRepository implements AuthRepository {
     const [row] = await this.db
       .select({ tokensUsed: tokenSum })
       .from(schema.dailyUsageRollups)
-      .where(buildRollupWhere(input));
+      .where(buildRollupWhere(this.db, input));
 
     return Number(row?.tokensUsed ?? 0);
   }
@@ -1165,19 +1167,34 @@ async function selectLeaderboardRows(
     })
     .from(schema.dailyUsageRollups)
     .innerJoin(schema.users, eq(schema.dailyUsageRollups.userId, schema.users.id))
-    .where(buildRollupWhere(input))
+    .where(buildRollupWhere(db, input))
     .groupBy(schema.dailyUsageRollups.userId, schema.users.displayName)
     .orderBy(desc(tokenSum), schema.users.displayName);
 
   return limit ? query.limit(limit) : query;
 }
 
-function buildRollupWhere(input: Omit<GetTokenLeaderboardInput, "limit">) {
+function buildRollupWhere(db: Db, input: Omit<GetTokenLeaderboardInput, "limit">) {
+  const onlineCutoff = new Date(Date.now() - DEVICE_ONLINE_THRESHOLD_MS);
+
   return and(
     eq(schema.dailyUsageRollups.agentProvider, input.agentProvider),
     input.workspaceId ? eq(schema.dailyUsageRollups.workspaceId, input.workspaceId) : undefined,
     input.fromDate ? gte(schema.dailyUsageRollups.usageDate, input.fromDate) : undefined,
     input.toDate ? lte(schema.dailyUsageRollups.usageDate, input.toDate) : undefined,
+    exists(
+      db
+        .select({ id: schema.devices.id })
+        .from(schema.devices)
+        .where(
+          and(
+            eq(schema.devices.userId, schema.dailyUsageRollups.userId),
+            isNotNull(schema.devices.lastSeenAt),
+            gt(schema.devices.lastSeenAt, onlineCutoff),
+            input.workspaceId ? eq(schema.devices.workspaceId, input.workspaceId) : undefined,
+          ),
+        ),
+    ),
   );
 }
 
@@ -1318,6 +1335,7 @@ function mapDevice(device: typeof schema.devices.$inferSelect): DeviceRecord {
     platform: device.platform,
     appVersion: device.appVersion,
     deviceLabel: device.deviceLabel,
+    lastSeenAt: device.lastSeenAt,
     createdAt: device.createdAt,
   };
 }

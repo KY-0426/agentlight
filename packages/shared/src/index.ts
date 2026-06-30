@@ -36,6 +36,38 @@ export function sanitizeDisplayMessage(value: string | null | undefined, maxLeng
   return normalized.length > maxLength ? normalized.slice(0, maxLength) : normalized;
 }
 
+export const DEVICE_ONLINE_THRESHOLD_MS = 5 * 60 * 1000;
+
+export function isDeviceOnline(lastSeenAt: Date | string | null | undefined, nowMs = Date.now()): boolean {
+  if (!lastSeenAt) {
+    return false;
+  }
+
+  const seenAtMs = lastSeenAt instanceof Date ? lastSeenAt.getTime() : Date.parse(lastSeenAt);
+  if (!Number.isFinite(seenAtMs)) {
+    return false;
+  }
+
+  return nowMs - seenAtMs <= DEVICE_ONLINE_THRESHOLD_MS;
+}
+
+export function formatTokenCount(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return "--";
+  }
+
+  const normalized = Math.max(0, Math.trunc(value));
+  if (normalized >= 100_000_000) {
+    const yi = normalized / 100_000_000;
+    return Number.isInteger(yi) ? `${yi}亿` : `${yi.toFixed(1)}亿`;
+  }
+  if (normalized >= 10_000) {
+    const wan = normalized / 10_000;
+    return Number.isInteger(wan) ? `${wan}万` : `${wan.toFixed(1)}万`;
+  }
+  return `${normalized}`;
+}
+
 export const uuidSchema = z.uuid();
 export const isoDateStringSchema = z.iso.datetime({ offset: true });
 export const emailSchema = z.email().max(254);

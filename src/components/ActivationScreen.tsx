@@ -1,6 +1,6 @@
 import { type FormEvent, useState } from "react";
 import { resolveDefaultCloudServerUrl } from "../domain/leaderboard";
-import { activateClient, bootstrapCloudDevice, isTauriRuntime } from "../tauriClient";
+import { activateClient, bootstrapCloudDevice, isTauriRuntime, syncAiToolConnectors } from "../tauriClient";
 
 interface ActivationScreenProps {
   onActivated: () => void;
@@ -28,6 +28,11 @@ export function ActivationScreen({ onActivated }: ActivationScreenProps) {
         await bootstrapCloudDevice(serverUrl);
       } catch {
         // 激活已成功；云端账号可在设置里稍后重连
+      }
+      try {
+        await syncAiToolConnectors(true);
+      } catch {
+        // 连接器自动配置失败不阻断激活
       }
       setStatus("idle");
       onActivated();

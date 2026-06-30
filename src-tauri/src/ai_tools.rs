@@ -21,6 +21,9 @@ static INSTALL_DETECT_CACHE: LazyLock<Mutex<HashMap<String, (bool, u128)>>> =
 static TOKEN_USAGE_LIST_CACHE: LazyLock<Mutex<Option<(u128, Vec<AiToolTokenUsage>)>>> =
     LazyLock::new(|| Mutex::new(None));
 static EXTENSION_DIR_CACHE: LazyLock<Mutex<Option<(bool, u128)>>> = LazyLock::new(|| Mutex::new(None));
+static AUTO_RESTORE_LAST_MS: LazyLock<Mutex<u128>> = LazyLock::new(|| Mutex::new(0));
+
+const AUTO_RESTORE_DEBOUNCE_MS: u128 = 300_000;
 
 const CURSOR_HOOK_SCRIPT: &str = r#"const http = require("http");
 
@@ -155,12 +158,19 @@ pub struct AiToolStatus {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub struct AiToolInstallResult {
     pub id: String,
     pub configured: bool,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct AiToolSyncResult {
+    pub restored: Vec<AiToolInstallResult>,
+    pub skipped_debounce: bool,
 }
 
 struct ToolDefinition {
@@ -380,6 +390,49 @@ fn format_activity_age(active_age_seconds: Option<u64>) -> String {
         Some(seconds) => format!("{} 分钟前活跃", seconds / 60),
         None => "暂无活跃记录".to_string(),
     }
+}
+
+pub fn sync_missing_ai_tool_connectors(force: bool) -> Result<AiToolSyncResult, CommandError> {
+    let now = crate::timestamp_ms();
+    if !force {
+        if let Ok(last) = AUTO_RESTORE_LAST_MS.lock() {
+            if now.saturating_sub(*last) <= AUTO_RESTORE_DEBOUNCE_MS {
+                return Ok(AiToolSyncResult {
+                    restored: Vec::new(),
+                    skipped_debounce: true,
+                });
+            }
+        }
+    }
+
+    let mut restored = Vec::new();
+    for tool in TOOL_DEFINITIONS {
+        if !tool.installable {
+            continue;
+        }
+
+        let status = build_tool_status(tool);
+        if !status.installed || status.configured {
+            continue;
+        }
+
+        match install_ai_tool(tool.id) {
+            Ok(result) => restored.push(result),
+            Err(error) => eprintln!(
+                "agent-light: auto-restore connector {} failed: {}",
+                tool.id, error.message
+            ),
+        }
+    }
+
+    if let Ok(mut last) = AUTO_RESTORE_LAST_MS.lock() {
+        *last = now;
+    }
+
+    Ok(AiToolSyncResult {
+        restored,
+        skipped_debounce: false,
+    })
 }
 
 pub fn install_ai_tool(tool_id: &str) -> Result<AiToolInstallResult, CommandError> {

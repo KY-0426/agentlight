@@ -27,7 +27,7 @@ describe("AiToolTokenOverview", () => {
     expect(html).toContain("AI 助手");
     expect(html).toContain("Codex");
     expect(html).toContain("工作中");
-    expect(html).toContain("13K");
+    expect(html).toContain("1.3万");
     expect(html).toContain("接入 AI 工具");
   });
 

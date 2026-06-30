@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeviceOnline } from "@agent-light/shared";
 import { hashOpaqueValue, createOpaqueToken } from "./crypto";
 import {
   AuthRepositoryError,
@@ -303,6 +304,7 @@ export class InMemoryAuthRepository implements AuthRepository {
         platform: input.platform,
         appVersion: input.appVersion,
         deviceLabel: input.deviceLabel ?? existing.deviceLabel,
+        lastSeenAt: new Date(),
       };
       this.devices.set(updated.id, updated);
 
@@ -361,6 +363,7 @@ export class InMemoryAuthRepository implements AuthRepository {
       platform: input.platform,
       appVersion: input.appVersion,
       deviceLabel: input.deviceLabel ?? user.displayName,
+      lastSeenAt: now,
       createdAt: now,
     };
 
@@ -387,6 +390,7 @@ export class InMemoryAuthRepository implements AuthRepository {
         platform: input.platform,
         appVersion: input.appVersion,
         deviceLabel: input.deviceLabel ?? existing.deviceLabel,
+        lastSeenAt: new Date(),
       };
       this.devices.set(updated.id, updated);
       return updated;
@@ -400,6 +404,7 @@ export class InMemoryAuthRepository implements AuthRepository {
       platform: input.platform,
       appVersion: input.appVersion,
       deviceLabel: input.deviceLabel ?? null,
+      lastSeenAt: new Date(),
       createdAt: new Date(),
     };
     this.devices.set(device.id, device);
@@ -499,6 +504,9 @@ export class InMemoryAuthRepository implements AuthRepository {
       if (input.toDate && rollup.usageDate > input.toDate) {
         continue;
       }
+      if (!this.isUserOnline(rollup.userId, input.workspaceId)) {
+        continue;
+      }
 
       totals.set(rollup.userId, (totals.get(rollup.userId) ?? 0) + rollup.tokensUsed);
     }
@@ -533,9 +541,39 @@ export class InMemoryAuthRepository implements AuthRepository {
       if (input.toDate && rollup.usageDate > input.toDate) {
         continue;
       }
+      if (!this.isUserOnline(rollup.userId, input.workspaceId)) {
+        continue;
+      }
       total += rollup.tokensUsed;
     }
     return total;
+  }
+
+  setDeviceLastSeenAt(installationId: string, lastSeenAt: Date | null): void {
+    const deviceId = this.devicesByInstallation.get(installationId);
+    if (!deviceId) {
+      return;
+    }
+    const device = this.devices.get(deviceId);
+    if (!device) {
+      return;
+    }
+    this.devices.set(deviceId, { ...device, lastSeenAt });
+  }
+
+  private isUserOnline(userId: string, workspaceId?: string): boolean {
+    for (const device of this.devices.values()) {
+      if (device.userId !== userId) {
+        continue;
+      }
+      if (workspaceId && device.workspaceId !== workspaceId) {
+        continue;
+      }
+      if (isDeviceOnline(device.lastSeenAt)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   async getTokenRank(input: GetTokenRankInput): Promise<number | null> {
