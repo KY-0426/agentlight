@@ -48,6 +48,18 @@ describe("activation routes", () => {
         activatedAt: body.data.activated_at,
       }, body.data.receipt),
     ).toBe(true);
+
+    const bootstrap = await app.inject({
+      method: "POST",
+      url: "/api/devices/bootstrap",
+      payload: {
+        installation_id: "install-activation-001",
+        platform: "macos",
+        app_version: "0.1.3",
+      },
+    });
+    expect(bootstrap.statusCode).toBe(201);
+    expect(bootstrap.json().data.user.display_name).toMatch(/^玩家_/);
   });
 
   it("rejects invalid activation codes", async () => {

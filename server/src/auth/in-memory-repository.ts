@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { hashOpaqueValue } from "./crypto";
+import { hashOpaqueValue, createOpaqueToken } from "./crypto";
 import {
   AuthRepositoryError,
   type AuthRepository,
@@ -95,6 +95,7 @@ export class InMemoryAuthRepository implements AuthRepository {
       label,
       expiresAt,
       usedAt: null,
+      userId: null,
       activatedInstallationId: null,
       activatedPlatform: null,
       activatedAppVersion: null,
@@ -310,49 +311,57 @@ export class InMemoryAuthRepository implements AuthRepository {
     }
 
     const now = new Date();
-    const displayName = input.deviceLabel?.trim() || defaultDeviceDisplayName(input.installationId);
-    const user: UserRecord = {
-      id: randomUUID(),
-      email: syntheticDeviceEmail(input.installationId),
-      phoneNumber: null,
-      passwordHash: input.passwordHash,
-      displayName,
-      disabledAt: null,
-      createdAt: now,
-    };
-    const workspace: WorkspaceRecord = {
-      id: randomUUID(),
-      name: `${displayName} Workspace`,
-      createdAt: now,
-    };
-    const membership: WorkspaceMembershipRecord = {
-      workspace,
-      membership: {
-        workspaceId: workspace.id,
-        userId: user.id,
-        role: "owner",
-        joinedAt: now,
-      },
-    };
+    const activationUser = this.findActivationUserForInstallation(input.installationId);
+    if (!activationUser) {
+      throw new AuthRepositoryError(
+        "activation_code_required",
+        "Device must be activated before cloud bootstrap",
+        403,
+      );
+    }
+
+    const user = this.users.get(activationUser.id);
+    if (!user || user.disabledAt) {
+      throw new AuthRepositoryError("unauthorized", "Activation account is unavailable", 401);
+    }
+
+    let memberships = this.memberships.get(user.id) ?? [];
+    if (memberships.length === 0) {
+      const workspace: WorkspaceRecord = {
+        id: randomUUID(),
+        name: `${user.displayName} 的工作空间`,
+        createdAt: now,
+      };
+      const membership: WorkspaceMembershipRecord = {
+        workspace,
+        membership: {
+          workspaceId: workspace.id,
+          userId: user.id,
+          role: "owner",
+          joinedAt: now,
+        },
+      };
+      memberships = [membership];
+      this.memberships.set(user.id, memberships);
+    }
+
+    const workspaceId = memberships[0]!.membership.workspaceId;
     const device: DeviceRecord = {
       id: randomUUID(),
-      workspaceId: workspace.id,
+      workspaceId,
       userId: user.id,
       installationId: input.installationId,
       platform: input.platform,
       appVersion: input.appVersion,
-      deviceLabel: input.deviceLabel ?? displayName,
+      deviceLabel: input.deviceLabel ?? user.displayName,
       createdAt: now,
     };
 
-    this.users.set(user.id, user);
-    this.usersByEmail.set(user.email, user.id);
-    this.memberships.set(user.id, [membership]);
     this.devices.set(device.id, device);
     this.devicesByInstallation.set(device.installationId, device.id);
 
     return {
-      identity: { user, workspaces: [membership], created: true },
+      identity: { user, workspaces: memberships, created: false },
       device,
       created: true,
     };
@@ -558,8 +567,38 @@ export class InMemoryAuthRepository implements AuthRepository {
     }
 
     const now = new Date();
+    const displayName = generateRandomDisplayName();
+    const user: UserRecord = {
+      id: randomUUID(),
+      email: syntheticActivationEmail(code.id),
+      phoneNumber: null,
+      passwordHash: input.passwordHash,
+      displayName,
+      disabledAt: null,
+      createdAt: now,
+    };
+    const workspace: WorkspaceRecord = {
+      id: randomUUID(),
+      name: `${displayName} 的工作空间`,
+      createdAt: now,
+    };
+    const membership: WorkspaceMembershipRecord = {
+      workspace,
+      membership: {
+        workspaceId: workspace.id,
+        userId: user.id,
+        role: "owner",
+        joinedAt: now,
+      },
+    };
+
+    this.users.set(user.id, user);
+    this.usersByEmail.set(user.email, user.id);
+    this.memberships.set(user.id, [membership]);
+
     code.status = "used";
     code.usedAt = now;
+    code.userId = user.id;
     code.activatedInstallationId = input.installationId;
     code.activatedPlatform = input.platform;
     code.activatedAppVersion = input.appVersion;
@@ -609,10 +648,32 @@ export class InMemoryAuthRepository implements AuthRepository {
 
   async revokeActivationCode(id: string): Promise<void> {
     const record = this.activationCodes.get(id);
-    if (!record || record.status !== "active") {
-      throw new AuthRepositoryError("not_found", "Activation code not found or not revocable", 404);
+    if (!record) {
+      throw new AuthRepositoryError("not_found", "Activation code not found", 404);
     }
+
+    if (record.status === "revoked") {
+      return;
+    }
+
+    if (record.status === "used") {
+      throw new AuthRepositoryError(
+        "activation_code_used",
+        "Activation code has already been used and cannot be revoked",
+        409,
+      );
+    }
+
     record.status = "revoked";
+  }
+
+  private findActivationUserForInstallation(installationId: string): { id: string } | undefined {
+    for (const record of this.activationCodes.values()) {
+      if (record.status === "used" && record.activatedInstallationId === installationId && record.userId) {
+        return { id: record.userId };
+      }
+    }
+    return undefined;
   }
 }
 
@@ -624,16 +685,17 @@ function toUsageDate(value: number): string {
   return new Date(value).toISOString().slice(0, 10);
 }
 
+function syntheticActivationEmail(activationCodeId: string): string {
+  const normalized = activationCodeId.replace(/-/g, "").slice(0, 32);
+  return `activation-${normalized}@activation.agent-light.local`;
+}
+
+function generateRandomDisplayName(): string {
+  const token = createOpaqueToken(6).replace(/_/g, "").slice(0, 6).toLowerCase();
+  return `玩家_${token}`;
+}
+
 function syntheticPhoneEmail(phoneNumber: string): string {
   const normalized = phoneNumber.replace("+", "00");
   return `phone-${normalized}@phone.agent-light.local`;
-}
-
-function syntheticDeviceEmail(installationId: string): string {
-  const normalized = installationId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 64);
-  return `device-${normalized}@device.agent-light.local`;
-}
-
-function defaultDeviceDisplayName(installationId: string): string {
-  return `设备 ${installationId.slice(-4)}`;
 }

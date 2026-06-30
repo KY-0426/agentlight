@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { activateClientRequestSchema, activateClientResponseSchema } from "@agent-light/shared";
-import { hashOpaqueValue } from "../auth/crypto";
+import { createOpaqueToken, hashOpaqueValue, hashPassword } from "../auth/crypto";
 import { sendError } from "../auth/http";
 import { AuthRepositoryError, type AuthRepository } from "../auth/repository";
 import type { ServerEnv } from "../config/env";
@@ -35,6 +35,7 @@ export async function registerActivationRoutes(
         installationId: parsed.data.installation_id,
         platform: parsed.data.platform,
         appVersion: parsed.data.app_version,
+        passwordHash: await hashPassword(createOpaqueToken()),
       });
 
       const activatedAt = result.activatedAt.toISOString();

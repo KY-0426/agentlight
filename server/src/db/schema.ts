@@ -236,6 +236,7 @@ export const activationCodes = pgTable(
     label: varchar("label", { length: 200 }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     usedAt: timestamp("used_at", { withTimezone: true }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     activatedInstallationId: varchar("activated_installation_id", { length: 128 }),
     activatedPlatform: desktopPlatformEnum("activated_platform"),
     activatedAppVersion: varchar("activated_app_version", { length: 40 }),
@@ -245,6 +246,7 @@ export const activationCodes = pgTable(
     codeHashUnique: uniqueIndex("activation_codes_code_hash_unique").on(table.codeHash),
     statusIdx: index("activation_codes_status_idx").on(table.status),
     installationIdx: index("activation_codes_installation_idx").on(table.activatedInstallationId),
+    userIdx: index("activation_codes_user_idx").on(table.userId),
   }),
 );
 

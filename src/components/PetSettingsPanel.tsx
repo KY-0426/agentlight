@@ -552,7 +552,7 @@ function AccountPanel({
 
     const nextName = draftName.trim();
     if (!nextName) {
-      setNameError("昵称不能为空");
+      setNameError("用户名不能为空");
       return;
     }
     if (nextName === cloudSession.display_name) {
@@ -567,7 +567,7 @@ function AccountPanel({
       await onRenameDisplayName(nextName);
       setEditingName(false);
     } catch (error) {
-      setNameError(error instanceof Error ? error.message : "昵称更新失败");
+      setNameError(error instanceof Error ? error.message : "用户名更新失败");
     } finally {
       setSavingName(false);
     }
@@ -579,12 +579,12 @@ function AccountPanel({
       <section className="settings-section" aria-labelledby="account-session-heading">
         <div className="settings-section__title">
           <h2 id="account-session-heading">{deviceAccount ? "我的账户" : "已登录"}</h2>
-          <span className="settings-badge">{deviceAccount ? "本机" : "已绑定手机"}</span>
+          <span className="settings-badge">{deviceAccount ? "激活账户" : "已绑定手机"}</span>
         </div>
         <div className="account-session-grid">
           <div className="account-session-grid__row">
             <article className="account-card">
-              <span>昵称</span>
+              <span>用户名</span>
               {editingName ? (
                 <form
                   className="account-name-form"
@@ -616,13 +616,13 @@ function AccountPanel({
                 <>
                   <strong>{formatFriendlyDisplayName(cloudSession.display_name)}</strong>
                   <button className="overview-card__link overview-card__link--inline" type="button" onClick={() => setEditingName(true)}>
-                    修改昵称
+                    修改用户名
                   </button>
                 </>
               )}
               <small>
                 {cloudSession.user_phone_number ??
-                  (deviceAccount ? "本机自动注册，无需登录" : cloudSession.user_email)}
+                  (deviceAccount ? "一码一账户，用户名可在云端持久保存" : cloudSession.user_email)}
               </small>
             </article>
             <article className="account-card">

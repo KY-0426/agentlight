@@ -178,6 +178,7 @@ export type ActivationCodeRecord = {
   label: string | null;
   expiresAt: Date | null;
   usedAt: Date | null;
+  userId: string | null;
   activatedInstallationId: string | null;
   activatedPlatform: DesktopPlatform | null;
   activatedAppVersion: string | null;
@@ -189,6 +190,7 @@ export type ActivateClientInput = {
   installationId: string;
   platform: DesktopPlatform;
   appVersion: string;
+  passwordHash: string;
 };
 
 export type ActivateClientResult = {
@@ -546,36 +548,44 @@ export class DrizzleAuthRepository implements AuthRepository {
         };
       }
 
-      const displayName = input.deviceLabel?.trim() || defaultDeviceDisplayName(input.installationId);
-      const [user] = await tx
-        .insert(schema.users)
-        .values({
-          email: syntheticDeviceEmail(input.installationId),
-          passwordHash: input.passwordHash,
-          displayName,
-        })
-        .returning();
-      const [workspace] = await tx
-        .insert(schema.workspaces)
-        .values({ name: `${displayName} Workspace` })
-        .returning();
-      const [membership] = await tx
-        .insert(schema.workspaceMembers)
-        .values({
+      const activationUser = await findActivationUserForInstallation(tx, input.installationId);
+      if (!activationUser) {
+        throw new AuthRepositoryError(
+          "activation_code_required",
+          "Device must be activated before cloud bootstrap",
+          403,
+        );
+      }
+
+      const [user] = await tx.select().from(schema.users).where(eq(schema.users.id, activationUser.id)).limit(1);
+      if (!user || user.disabledAt) {
+        throw new AuthRepositoryError("unauthorized", "Activation account is unavailable", 401);
+      }
+
+      const memberships = await listMemberships(tx, user.id);
+      let workspaceId = memberships[0]?.membership.workspaceId;
+      if (!workspaceId) {
+        const [workspace] = await tx
+          .insert(schema.workspaces)
+          .values({ name: `${user.displayName} 的工作空间` })
+          .returning();
+        await tx.insert(schema.workspaceMembers).values({
           workspaceId: workspace.id,
           userId: user.id,
           role: "owner",
-        })
-        .returning();
+        });
+        workspaceId = workspace.id;
+      }
+
       const [device] = await tx
         .insert(schema.devices)
         .values({
-          workspaceId: workspace.id,
+          workspaceId,
           userId: user.id,
           installationId: input.installationId,
           platform: input.platform,
           appVersion: input.appVersion,
-          deviceLabel: input.deviceLabel ?? displayName,
+          deviceLabel: input.deviceLabel ?? user.displayName,
           lastSeenAt: new Date(),
         })
         .returning();
@@ -583,18 +593,8 @@ export class DrizzleAuthRepository implements AuthRepository {
       return {
         identity: {
           user: mapUser(user),
-          workspaces: [
-            {
-              workspace: mapWorkspace(workspace),
-              membership: {
-                workspaceId: membership.workspaceId,
-                userId: membership.userId,
-                role: membership.role,
-                joinedAt: membership.joinedAt,
-              },
-            },
-          ],
-          created: true,
+          workspaces: await listMemberships(tx, user.id),
+          created: false,
         },
         device: mapDevice(device),
         created: true,
@@ -850,11 +850,31 @@ export class DrizzleAuthRepository implements AuthRepository {
       }
 
       const now = new Date();
+      const displayName = generateRandomDisplayName();
+      const [user] = await tx
+        .insert(schema.users)
+        .values({
+          email: syntheticActivationEmail(code.id),
+          passwordHash: input.passwordHash,
+          displayName,
+        })
+        .returning();
+      const [workspace] = await tx
+        .insert(schema.workspaces)
+        .values({ name: `${displayName} 的工作空间` })
+        .returning();
+      await tx.insert(schema.workspaceMembers).values({
+        workspaceId: workspace.id,
+        userId: user.id,
+        role: "owner",
+      });
+
       const [updated] = await tx
         .update(schema.activationCodes)
         .set({
           status: "used",
           usedAt: now,
+          userId: user.id,
           activatedInstallationId: input.installationId,
           activatedPlatform: input.platform,
           activatedAppVersion: input.appVersion,
@@ -919,15 +939,32 @@ export class DrizzleAuthRepository implements AuthRepository {
   }
 
   async revokeActivationCode(id: string): Promise<void> {
-    const [updated] = await this.db
+    const [existing] = await this.db
+      .select({ status: schema.activationCodes.status })
+      .from(schema.activationCodes)
+      .where(eq(schema.activationCodes.id, id))
+      .limit(1);
+
+    if (!existing) {
+      throw new AuthRepositoryError("not_found", "Activation code not found", 404);
+    }
+
+    if (existing.status === "revoked") {
+      return;
+    }
+
+    if (existing.status === "used") {
+      throw new AuthRepositoryError(
+        "activation_code_used",
+        "Activation code has already been used and cannot be revoked",
+        409,
+      );
+    }
+
+    await this.db
       .update(schema.activationCodes)
       .set({ status: "revoked", updatedAt: new Date() })
-      .where(and(eq(schema.activationCodes.id, id), eq(schema.activationCodes.status, "active")))
-      .returning({ id: schema.activationCodes.id });
-
-    if (!updated) {
-      throw new AuthRepositoryError("not_found", "Activation code not found or not revocable", 404);
-    }
+      .where(eq(schema.activationCodes.id, id));
   }
 }
 
@@ -1147,13 +1184,36 @@ function syntheticPhoneEmail(phoneNumber: string): string {
   return `phone-${normalized}@phone.agent-light.local`;
 }
 
-function syntheticDeviceEmail(installationId: string): string {
-  const normalized = installationId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 64);
-  return `device-${normalized}@device.agent-light.local`;
+function syntheticActivationEmail(activationCodeId: string): string {
+  const normalized = activationCodeId.replace(/-/g, "").slice(0, 32);
+  return `activation-${normalized}@activation.agent-light.local`;
 }
 
-function defaultDeviceDisplayName(installationId: string): string {
-  return `设备 ${installationId.slice(-4)}`;
+function generateRandomDisplayName(): string {
+  const token = createOpaqueToken(6).replace(/_/g, "").slice(0, 6).toLowerCase();
+  return `玩家_${token}`;
+}
+
+async function findActivationUserForInstallation(
+  tx: Transaction,
+  installationId: string,
+): Promise<{ id: string } | undefined> {
+  const [activation] = await tx
+    .select({ userId: schema.activationCodes.userId })
+    .from(schema.activationCodes)
+    .where(
+      and(
+        eq(schema.activationCodes.activatedInstallationId, installationId),
+        eq(schema.activationCodes.status, "used"),
+      ),
+    )
+    .limit(1);
+
+  if (!activation?.userId) {
+    return undefined;
+  }
+
+  return { id: activation.userId };
 }
 
 function generateActivationCodePlaintext(): string {
@@ -1168,6 +1228,7 @@ function mapActivationCode(row: typeof schema.activationCodes.$inferSelect): Act
     label: row.label,
     expiresAt: row.expiresAt,
     usedAt: row.usedAt,
+    userId: row.userId,
     activatedInstallationId: row.activatedInstallationId,
     activatedPlatform: row.activatedPlatform,
     activatedAppVersion: row.activatedAppVersion,

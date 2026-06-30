@@ -8,6 +8,7 @@ const testEnv = {
   DATABASE_URL: "postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light",
   ACCESS_TOKEN_SECRET: "a".repeat(32),
   REFRESH_TOKEN_SECRET: "b".repeat(32),
+  ACTIVATION_SIGNING_SECRET: "c".repeat(32),
 };
 
 async function registerUser(app: Awaited<ReturnType<typeof buildApp>>, inviteCode: string, email: string) {
@@ -50,14 +51,51 @@ async function registerDevice(app: Awaited<ReturnType<typeof buildApp>>, accessT
 }
 
 describe("mvp api routes", () => {
-  it("bootstraps a device account without login and reuses the same user on repeat", async () => {
+  async function activateInstallation(
+    app: Awaited<ReturnType<typeof buildApp>>,
+    installationId: string,
+    repository: InMemoryAuthRepository,
+  ) {
+    repository.addActivationCode("AL-TESTCODE123456");
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/activation/activate",
+      payload: {
+        activation_code: "AL-TESTCODE123456",
+        installation_id: installationId,
+        platform: "windows",
+        app_version: "0.1.0",
+      },
+    });
+    expect(response.statusCode).toBe(200);
+  }
+
+  it("requires activation before bootstrap", async () => {
     const repository = new InMemoryAuthRepository();
     const app = await buildApp({ env: testEnv, authRepository: repository });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/devices/bootstrap",
+      payload: {
+        installation_id: "install-bootstrap-unactivated",
+        platform: "windows",
+        app_version: "0.1.0",
+      },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().error.code).toBe("activation_code_required");
+  });
+
+  it("bootstraps an activation account and reuses the same user on repeat", async () => {
+    const repository = new InMemoryAuthRepository();
+    const app = await buildApp({ env: testEnv, authRepository: repository });
+    const installationId = "install-bootstrap-0001";
+    await activateInstallation(app, installationId, repository);
     const payload = {
-      installation_id: "install-bootstrap-0001",
+      installation_id: installationId,
       platform: "windows" as const,
       app_version: "0.1.0",
-      device_label: "Win Desktop",
     };
 
     const first = await app.inject({ method: "POST", url: "/api/devices/bootstrap", payload });
@@ -71,7 +109,7 @@ describe("mvp api routes", () => {
         platform: payload.platform,
       },
       user: {
-        display_name: "Win Desktop",
+        display_name: expect.stringMatching(/^玩家_/),
         phone_number: null,
       },
     });
@@ -79,6 +117,18 @@ describe("mvp api routes", () => {
     expect(second.json().data.created).toBe(false);
     expect(second.json().data.user.id).toBe(first.json().data.user.id);
     expect(second.json().data.device.id).toBe(first.json().data.device.id);
+
+    const renamed = await app.inject({
+      method: "PATCH",
+      url: "/api/me",
+      headers: { authorization: `Bearer ${first.json().data.access_token}` },
+      payload: { display_name: "我的固定用户名" },
+    });
+    expect(renamed.statusCode).toBe(200);
+
+    const third = await app.inject({ method: "POST", url: "/api/devices/bootstrap", payload });
+    expect(third.statusCode).toBe(200);
+    expect(third.json().data.user.display_name).toBe("我的固定用户名");
 
     const usage = await app.inject({
       method: "POST",

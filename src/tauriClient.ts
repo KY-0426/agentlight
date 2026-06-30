@@ -559,7 +559,8 @@ export function isDeviceCloudAccount(session: CloudSession | null | undefined): 
   return Boolean(
     session &&
       !session.user_phone_number &&
-      session.user_email.endsWith("@device.agent-light.local"),
+      (session.user_email.endsWith("@device.agent-light.local") ||
+        session.user_email.endsWith("@activation.agent-light.local")),
   );
 }
 
@@ -606,7 +607,6 @@ export async function bootstrapCloudDevice(
       installation_id: installationId,
       platform: detectDesktopPlatform(),
       app_version: appVersion,
-      device_label: detectFriendlyDeviceLabel(),
     }),
   });
 
@@ -644,7 +644,11 @@ export async function ensureCloudSession(
 ): Promise<CloudSession | null> {
   const existing = await loadCloudSession();
   if (existing?.access_token && existing.device_id) {
-    return existing;
+    try {
+      return await syncCloudProfileFromServer(existing);
+    } catch {
+      return existing;
+    }
   }
   if (!isTauriRuntime()) {
     return existing;
@@ -720,7 +724,7 @@ export async function updateCloudDisplayName(
 ): Promise<CloudSession> {
   const trimmed = displayName.trim();
   if (!trimmed) {
-    throw new Error("昵称不能为空");
+    throw new Error("用户名不能为空");
   }
 
   const response = await fetch(buildApiUrl(session.server_url, "/api/me"), {
@@ -737,15 +741,45 @@ export async function updateCloudDisplayName(
 
   const payload = await readJsonPayload(response);
   if (!response.ok) {
-    throw new Error(getApiErrorMessage(payload) ?? `昵称更新接口返回 ${response.status}`);
+    throw new Error(getApiErrorMessage(payload) ?? `用户名更新接口返回 ${response.status}`);
   }
   if (!isSuccessRecord(payload) || !isUpdateProfilePayload(payload.data)) {
-    throw new Error("昵称更新响应格式不正确");
+    throw new Error("用户名更新响应格式不正确");
   }
 
   return saveCloudSession({
     ...session,
     display_name: payload.data.user.display_name,
+  });
+}
+
+export async function syncCloudProfileFromServer(session: CloudSession): Promise<CloudSession> {
+  const response = await fetch(buildApiUrl(session.server_url, "/api/me"), {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+    },
+  }).catch(() => {
+    throw new Error("无法连接云端，请检查网络或服务端地址");
+  });
+
+  const payload = await readJsonPayload(response);
+  if (!response.ok) {
+    throw new Error(getApiErrorMessage(payload) ?? `账号信息接口返回 ${response.status}`);
+  }
+  if (!isSuccessRecord(payload) || !isMeResponsePayload(payload.data)) {
+    throw new Error("账号信息响应格式不正确");
+  }
+
+  const workspaceId = payload.data.workspaces[0]?.workspace.id ?? session.workspace_id;
+  return saveCloudSession({
+    ...session,
+    user_id: payload.data.user.id,
+    user_email: payload.data.user.email,
+    user_phone_number: payload.data.user.phone_number,
+    display_name: payload.data.user.display_name,
+    workspace_id: workspaceId,
   });
 }
 
@@ -936,6 +970,22 @@ function normalizeCloudServerUrl(serverUrl: string): string {
 
 function isSuccessRecord(value: unknown): value is { ok: true; data: unknown } {
   return isRecord(value) && value.ok === true && "data" in value;
+}
+
+function isMeResponsePayload(value: unknown): value is AuthSessionPayload["user"] & {
+  workspaces: AuthSessionPayload["workspaces"];
+} {
+  if (!isRecord(value) || !isRecord(value.user) || !Array.isArray(value.workspaces)) {
+    return false;
+  }
+
+  return (
+    typeof value.user.id === "string" &&
+    typeof value.user.email === "string" &&
+    (value.user.phone_number === null || typeof value.user.phone_number === "string") &&
+    typeof value.user.display_name === "string" &&
+    value.workspaces.some((item) => isRecord(item) && isRecord(item.workspace) && typeof item.workspace.id === "string")
+  );
 }
 
 function isAuthSessionPayload(value: unknown): value is AuthSessionPayload {

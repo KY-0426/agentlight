@@ -38,6 +38,7 @@ import {
   clearCloudSession,
   sendPhoneVerificationCodeCloud,
   updateCloudDisplayName,
+  syncCloudProfileFromServer,
   setAgentState,
   setAlwaysOnTop,
   setHardwareLightSettings,
@@ -466,12 +467,16 @@ export default function App() {
   async function refreshCloudSession() {
     try {
       let session = await loadCloudSession();
-      if (!session?.access_token || !session.device_id) {
-        if (cloudSyncEnabledRef.current) {
-          session = await ensureCloudSession();
-        } else {
-          session = null;
+      if (session?.access_token && session.device_id) {
+        try {
+          session = await syncCloudProfileFromServer(session);
+        } catch {
+          // 保留本地会话，避免离线时清空
         }
+      } else if (cloudSyncEnabledRef.current) {
+        session = await ensureCloudSession();
+      } else {
+        session = null;
       }
       setCloudSession(session);
       cloudSessionRef.current = session;
