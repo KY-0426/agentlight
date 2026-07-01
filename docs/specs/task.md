@@ -32,7 +32,7 @@
 
 ## P0：先确认
 
-- [x] P0 确认服务端技术栈：TypeScript + Fastify + PostgreSQL + Drizzle + Zod。
+- [x] P0 确认服务端技术栈：TypeScript + Fastify + MySQL + Drizzle + Zod。
 - [x] P0 确认新增 `server/` 和 `packages/shared/`。
 - [x] P0 确认账号入口：手机号验证码登录并自动创建账号；邮箱登录兼容旧账号。
 - [x] P0 确认账号模型：user、workspace、workspace_member，首个注册用户自动创建个人 workspace。
@@ -49,7 +49,7 @@
 - [x] P1 创建 `server/` 项目。
 - [x] P1 创建 `packages/shared/`，放共享 Zod schema、DTO、错误码。
 - [x] P1 配置 Fastify 启动、健康检查、环境变量校验。
-- [x] P1 接入 PostgreSQL。
+- [x] P1 接入 MySQL（CynosDB / 本地 compose）。
 - [x] P1 接入 Drizzle 和 migration。
 - [x] P1 建 `users` 表。
 - [x] P1 建 `workspaces` 表。
@@ -214,7 +214,7 @@
 - [x] 已确认未登录保留本地桌宠、RGB、本地 API 和 CLI。
 - [x] 已确认工厂量产工具、OTA、签名发布和自动更新移到 P2。
 - [x] 已读取 `embedded-firmware` raw，用于硬件和固件量产代办。
-- [x] 已实现服务端后端 MVP 核心 API；服务端测试 17 passed，PostgreSQL 本地已跑通。
+- [x] 已实现服务端后端 MVP 核心 API；服务端测试 17 passed，MySQL 本地已跑通。
 - [x] 已实现 Windows provider 骨架（Codex 路径可配置 + COMx 串口），实机验证待跑。
 - [x] 已实现服务端 Token 排行榜 API；桌面端已增加默认全员榜、手机号登录入口、设备注册和在线自动上报。
 - [x] 已实现离线同步队列、refresh token 自动续期；Keychain/Credential Manager 移到 P2。

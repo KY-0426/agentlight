@@ -14,8 +14,8 @@ echo "REFRESH_TOKEN_SECRET=$(openssl rand -hex 32)"
 ## 二、准备环境变量
 
 ```bash
-cp server/.env.production.example server/.env
-# 编辑 server/.env，填入上面生成的两个密钥
+cp server/.env.example server/.env
+# 编辑 server/.env，填入上面生成的两个密钥与 DATABASE_URL
 ```
 
 ## 三、启动服务
@@ -36,13 +36,13 @@ docker compose --profile prod up -d --build
 # 本地开发（需先创建库：docker compose up -d mysql）
 npm run db:migrate
 
-# Docker 生产环境（容器内执行）
+# Docker 生产环境（容器内执行；compose prod 镜像启动时会自动 migrate）
 docker compose exec server npx drizzle-kit migrate
 ```
 
-## 云托管（外置 MySQL 5.7）
+## 云托管（外置 MySQL / CynosDB）
 
-容器**不再内置 PostgreSQL**。部署时在云托管环境变量配置：
+部署时在云托管环境变量配置：
 
 ```bash
 # 云托管容器（同 VPC，用内网）
@@ -63,10 +63,9 @@ PORT=8787
 
 ## 云托管部署检查清单
 
-1. **代码已 push**：日志里若出现 `Initializing embedded PostgreSQL`，说明仍在跑旧镜像，需 push 含 MySQL 迁移的代码后再部署。
-2. **环境变量 `DATABASE_URL`** 必须为 `mysql://...`（内网 `10.15.108.198:3306`），不能只靠容器默认值。
-3. 启动日志应出现 `Database: MySQL (external)`，随后 `migrations applied successfully`，最后监听 `:8787`。
-4. 健康检查失败 `connection refused` 通常是 migration 未跑完或进程崩溃——先看启动日志，不要只看 probe。
+1. **环境变量 `DATABASE_URL`** 必须为 `mysql://...`（内网 `10.15.108.198:3306` 或 CynosDB 外网域名），不能只靠容器默认值。
+2. 启动日志应出现 `Database: MySQL (external)`，随后 migration 成功，最后监听 `:8787`。
+3. 健康检查失败 `connection refused` 通常是 migration 未跑完或进程崩溃——先看启动日志，不要只看 probe。
 
 ## 五、健康检查
 
@@ -95,5 +94,5 @@ curl http://127.0.0.1:8787/health
 
 - 生产环境必须设置 `NODE_ENV=production`，否则会使用开发态默认密钥
 - `server/.env` 含敏感信息，切勿提交到版本库（已在 .gitignore）
-- PostgreSQL 默认密码仅用于开发，生产请修改 `compose.yaml` 中的凭据
+- 本地 `compose.yaml` 中 MySQL 默认密码仅用于开发，生产请使用独立凭据与 CynosDB
 - 桌面端上报 token 用量时会自动续期 access token，无需人工干预

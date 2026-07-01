@@ -18,6 +18,7 @@ import {
   getApiErrorMessage,
   normalizeLeaderboardServerUrl,
   parseTokenLeaderboardResponse,
+  resolveDefaultCloudServerUrl,
   type AgentProvider,
   type TokenLeaderboardRequest,
   type TokenLeaderboardResponse,
@@ -312,13 +313,6 @@ export interface CloudPhoneLoginRequest {
 
 export type CloudServerHealth = "healthy" | "unreachable" | "invalid_url";
 
-export interface CodexUsageUploadResult {
-  codex_thread_id: string;
-  tokens_used: number;
-  accepted_tokens_used: number;
-  ignored_stale_value: boolean;
-}
-
 export async function getMainWindowPlacement(): Promise<WindowPlacement> {
   if (!isTauriRuntime()) {
     return { x: 80, y: 72, near_top: false };
@@ -601,42 +595,31 @@ export function isCloudAccessTokenExpiringSoon(session: CloudSession): boolean {
   return session.expires_at_ms - Date.now() <= TOKEN_REFRESH_MARGIN_MS;
 }
 
-export async function refreshCloudAccessToken(session: CloudSession): Promise<CloudSession> {
-  const response = await fetch(buildApiUrl(session.server_url, "/api/auth/refresh"), {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      refresh_token: session.refresh_token,
-    }),
-  }).catch(() => {
-    throw new Error("无法连接云端，请检查网络或服务端地址");
-  });
-
-  const payload = await readJsonPayload(response);
-  if (!response.ok) {
-    throw new Error(getApiErrorMessage(payload) ?? `续期接口返回 ${response.status}`);
-  }
-  if (!isSuccessRecord(payload) || !isRefreshTokenPayload(payload.data)) {
-    throw new Error("续期响应格式不正确");
+export async function refreshCloudAccessToken(_session: CloudSession): Promise<CloudSession> {
+  if (!isTauriRuntime()) {
+    throw new Error("云端续期仅支持桌面客户端");
   }
 
-  return saveCloudSession({
-    ...session,
-    access_token: payload.data.access_token,
-    refresh_token: payload.data.refresh_token,
-    expires_at_ms: Date.now() + payload.data.expires_in_seconds * 1000,
-  });
+  return invoke<CloudSession>("refresh_cloud_session", { force: true });
 }
 
 export async function ensureCloudAccessToken(session: CloudSession): Promise<CloudSession> {
   if (!isCloudAccessTokenExpiringSoon(session)) {
     return session;
   }
+  if (!isTauriRuntime()) {
+    return session;
+  }
 
-  return refreshCloudAccessToken(session);
+  return invoke<CloudSession>("refresh_cloud_session", { force: false });
+}
+
+export async function getCloudSyncEnabled(): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return true;
+  }
+
+  return invoke<boolean>("get_cloud_sync_enabled");
 }
 
 export function isDeviceCloudAccount(session: CloudSession | null | undefined): boolean {
@@ -727,6 +710,13 @@ export async function bootstrapCloudDevice(
 export async function ensureCloudSession(
   serverUrl = DEFAULT_LEADERBOARD_SERVER_URL,
 ): Promise<CloudSession | null> {
+  if (isTauriRuntime()) {
+    const enabled = await getCloudSyncEnabled();
+    if (!enabled) {
+      return loadCloudSession();
+    }
+  }
+
   const existing = await loadCloudSession();
   if (existing?.access_token && existing.device_id) {
     try {
@@ -953,45 +943,6 @@ export async function getTokenLeaderboard(
   };
 }
 
-export async function uploadCodexThreadUsage(
-  session: CloudSession,
-  snapshot: CodexStatusSnapshot,
-  agentProvider: AgentProvider = DEFAULT_AGENT_PROVIDER,
-): Promise<CodexUsageUploadResult | null> {
-  if (!session.device_id || !snapshot.latest_thread_id || typeof snapshot.tokens_used !== "number") {
-    return null;
-  }
-
-  const response = await fetch(buildApiUrl(session.server_url, "/api/usage/codex-thread"), {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${session.access_token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      workspace_id: session.workspace_id,
-      device_id: session.device_id,
-      agent_provider: agentProvider,
-      codex_thread_id: snapshot.latest_thread_id,
-      model: snapshot.latest_model || undefined,
-      tokens_used: Math.max(0, Math.trunc(snapshot.tokens_used)),
-      thread_updated_at_ms: Math.max(0, Math.trunc(snapshot.thread_updated_at_ms ?? snapshot.sampled_at_ms)),
-      sampled_at_ms: Math.max(0, Math.trunc(snapshot.sampled_at_ms)),
-    }),
-  });
-
-  const payload = await readJsonPayload(response);
-  if (!response.ok) {
-    throw new Error(getApiErrorMessage(payload) ?? `用量上报接口返回 ${response.status}`);
-  }
-  if (!isSuccessRecord(payload) || !isRecord(payload.data)) {
-    throw new Error("用量上报响应格式不正确");
-  }
-
-  return payload.data as unknown as CodexUsageUploadResult;
-}
-
 type AuthSessionPayload = {
   access_token: string;
   refresh_token: string;
@@ -1126,21 +1077,6 @@ function isMeResponsePayload(value: unknown): value is {
     (value.user.phone_number === null || typeof value.user.phone_number === "string") &&
     typeof value.user.display_name === "string" &&
     value.workspaces.some((item) => isRecord(item) && isRecord(item.workspace) && typeof item.workspace.id === "string")
-  );
-}
-
-type RefreshTokenPayload = {
-  access_token: string;
-  refresh_token: string;
-  expires_in_seconds: number;
-};
-
-function isRefreshTokenPayload(value: unknown): value is RefreshTokenPayload {
-  return (
-    isRecord(value) &&
-    typeof value.access_token === "string" &&
-    typeof value.refresh_token === "string" &&
-    typeof value.expires_in_seconds === "number"
   );
 }
 

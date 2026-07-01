@@ -39,12 +39,12 @@ import {
   updateCloudDisplayName,
   syncCloudProfileFromServer,
   ensureCloudAccessToken,
+  getCloudSyncEnabled,
   setAgentState,
   setAlwaysOnTop,
   setHardwareLightSettings,
   snapMainWindowToTop,
   startWindowDrag,
-  uploadCodexThreadUsage,
   type CloudSession,
   type CodexStatusSnapshot,
   type HardwareStatusSnapshot,
@@ -145,7 +145,6 @@ export default function App() {
   const cloudSyncEnabledRef = useRef(config.cloudSyncEnabled);
   const leaderboardAgentProviderRef = useRef<AgentProvider>("codex");
   const leaderboardTimePeriodRef = useRef<LeaderboardTimePeriod>("total");
-  const lastUsageUploadKeyRef = useRef<Partial<Record<AgentProvider, string>>>({});
   const windowLabelRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -169,6 +168,18 @@ export default function App() {
   useEffect(() => {
     cloudSyncEnabledRef.current = config.cloudSyncEnabled;
   }, [config.cloudSyncEnabled]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    void getCloudSyncEnabled()
+      .then((enabled) => {
+        cloudSyncEnabledRef.current = enabled;
+        updateConfig({ cloudSyncEnabled: enabled });
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     void syncHardwareLightSettings(config.lightSettings);
@@ -444,12 +455,6 @@ export default function App() {
       setCodexStatus(codexSnapshot);
       setCursorStatus(cursorSnapshot);
       setAiToolTokens(aiToolsSnapshot);
-      if (codexSnapshot) {
-        void syncAgentUsage(codexSnapshot, "codex");
-      }
-      if (cursorSnapshot) {
-        void syncAgentUsage(cursorSnapshot, "cursor");
-      }
     } finally {
       if (options?.showLoading) {
         setAiToolLoading(false);
@@ -594,55 +599,8 @@ export default function App() {
     await clearCloudSession();
     setCloudSession(null);
     cloudSessionRef.current = null;
-    lastUsageUploadKeyRef.current = {};
     setCloudSyncStatus({ state: "signed_out", message: "已断开云端同步" });
     await refreshTokenLeaderboard(null);
-  }
-
-  async function syncAgentUsage(
-    snapshot: CodexStatusSnapshot,
-    agentProvider: AgentProvider,
-    sessionOverride?: CloudSession | null,
-  ) {
-    const session = sessionOverride === undefined ? cloudSessionRef.current : sessionOverride;
-    if (!session) {
-      return;
-    }
-    if (!session.device_id) {
-      setCloudSyncStatus({ state: "error", message: "云会话缺少设备 ID，请重新登录" });
-      return;
-    }
-    if (!snapshot.latest_thread_id || typeof snapshot.tokens_used !== "number") {
-      return;
-    }
-
-    const threadUpdatedAt = snapshot.thread_updated_at_ms ?? snapshot.sampled_at_ms;
-    const uploadKey = `${agentProvider}:${session.device_id}:${snapshot.latest_thread_id}:${snapshot.tokens_used}:${threadUpdatedAt}`;
-    if (lastUsageUploadKeyRef.current[agentProvider] === uploadKey) {
-      return;
-    }
-    lastUsageUploadKeyRef.current[agentProvider] = uploadKey;
-    setCloudSyncStatus({ state: "syncing", message: `正在上报 ${agentProvider} token 消耗` });
-
-    try {
-      const result = await uploadCodexThreadUsage(session, snapshot, agentProvider);
-      if (!result) {
-        setCloudSyncStatus({ state: "ready", message: "等待可上报的 agent 线程" });
-        return;
-      }
-      setCloudSyncStatus({
-        state: "synced",
-        message: result.ignored_stale_value ? "旧 token 快照已忽略" : "token 消耗已同步到排行榜",
-        lastSyncedAtMs: Date.now(),
-      });
-      void refreshTokenLeaderboard(session);
-    } catch (error) {
-      delete lastUsageUploadKeyRef.current[agentProvider];
-      setCloudSyncStatus({
-        state: "error",
-        message: error instanceof Error ? error.message : "token 消耗上报失败",
-      });
-    }
   }
 
   function updateConfig(update: Partial<StoredConfig>) {

@@ -94,7 +94,8 @@ export function AiToolConnectModal({ open, onClose, onToolsChanged }: AiToolConn
           <ul className="ai-tool-list">
             {tools.map((tool) => {
               const isConfigured = tool.configured;
-              const isBusy = (activeToolId === tool.id && installState === "loading") || installClick.busy;
+              const isInstallingThis = activeToolId === tool.id && installState === "loading";
+              const isAnyInstalling = installClick.busy;
               const actionLabel = isConfigured ? "重新安装" : "安装";
 
               return (
@@ -117,10 +118,10 @@ export function AiToolConnectModal({ open, onClose, onToolsChanged }: AiToolConn
                     <button
                       className="ai-tool-list__button"
                       type="button"
-                      disabled={isBusy}
+                      disabled={isAnyInstalling}
                       onClick={() => installClick.onClick(tool)}
                     >
-                      {isBusy ? "处理中…" : actionLabel}
+                      {isInstallingThis ? "处理中…" : actionLabel}
                     </button>
                   </div>
                 </li>

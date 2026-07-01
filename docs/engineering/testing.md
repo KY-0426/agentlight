@@ -6,7 +6,7 @@
 | --- | --- |
 | `npm run test` | 运行前端 Vitest 单元测试（`src/**/*.test.ts`） |
 | `npm run test:shared` | 运行 `@agent-light/shared` 包测试 |
-| `npm run server:test` | 运行 Fastify 服务端测试（内存仓储，无需 Postgres） |
+| `npm run server:test` | 运行 Fastify 服务端测试（内存仓储，无需 MySQL） |
 | `npm run test:all` | 依次运行前端、shared、server Vitest 与 `cargo test` |
 | `npm run test:rust` | 仅运行 `src-tauri/` Rust 单元测试 |
 | `npm run build` | TypeScript build + Vite build |
@@ -83,7 +83,7 @@ Codex 联动：
 - Codex 状态读取依赖本地数据结构，缺 fixture 和降级测试。
 - 视觉动画缺截图或 Playwright/Tauri 手工验收记录。
 - release build 与安装包首启尚需单独记录。
-- CI 已覆盖 `test:all`、`build`、`cargo test`；Postgres 集成与 E2E 仍缺。
+- CI 已覆盖 `test:all`、`build`、`cargo test`；MySQL 集成与 E2E 仍缺。
 
 ## 文档声明规则
 

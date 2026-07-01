@@ -778,8 +778,8 @@ function CloudConnectPanel({
                   <p className="leaderboard-note">已激活用户会优先使用激活记录中的地址，此处仅作无激活记录时的兜底。</p>
                   <p className="leaderboard-note">本地开发请先启动服务：</p>
                   <pre className="cloud-connect-panel__commands">npm run server:dev</pre>
-                  <p className="leaderboard-note">若使用 PostgreSQL，还需：</p>
-                  <pre className="cloud-connect-panel__commands">docker compose up -d postgres</pre>
+                  <p className="leaderboard-note">本地开发还需 MySQL：</p>
+                  <pre className="cloud-connect-panel__commands">docker compose up -d mysql{"\n"}npm run db:migrate</pre>
                 </>
               ) : null}
             </div>

@@ -24,7 +24,7 @@ Agent Light 多用户软件 MVP 的 Fastify 服务端。
 - Zod 环境变量校验
 - Fastify 结构化错误响应
 - Pino 日志脱敏配置
-- 本地 PostgreSQL `compose.yaml`
+- 本地 MySQL `compose.yaml`
 - Drizzle schema 和 migration
 - 共享 DTO/schema 来自 `@agent-light/shared`
 - 服务端测试覆盖手机号验证码登录自动建号、邮箱登录、refresh、me、设备注册、硬件绑定、用量去重、旧值保护、Agent 分榜、排行榜、越权和日志脱敏配置
@@ -33,33 +33,18 @@ Agent Light 多用户软件 MVP 的 Fastify 服务端。
 
 ```bash
 cp server/.env.example server/.env
-npm run db:setup
+docker compose up -d mysql
 npm run db:migrate
 npm run server:dev
 ```
 
-本地 PostgreSQL（二选一）：
+`server/.env.example` 中 `DATABASE_URL` 默认指向本机 `3306` 的 MySQL（与 `compose.yaml` 中 `mysql` 服务一致）。
 
-```bash
-# Docker
-docker compose up -d postgres
-
-# 或本机已安装 PostgreSQL 17 时，用超级用户创建 agent_light 库/账号
-npm run db:setup
-npm run db:migrate
-```
-
-若本机 `postgres` 超级用户密码不是默认值，先设置：
-
-```bash
-set POSTGRES_ADMIN_PASSWORD=你的密码   # Windows CMD
-$env:POSTGRES_ADMIN_PASSWORD='你的密码' # PowerShell
-npm run db:setup
-```
+云托管 / CynosDB 示例见 `server/.env.example` 注释，或 [部署指南](../docs/engineering/deploy.md)。
 
 ## 边界
 
-- 本地单元测试使用内存仓储；真实 PostgreSQL migration 执行和数据库集成测试仍需单独跑。
+- 本地单元测试使用内存仓储；真实 MySQL migration 执行和数据库集成测试仍需单独跑。
 - 桌面端启动时自动调用 bootstrap，无需登录即可上报 token 并上榜；手机号绑定与多设备合并即将推出
 - Win/Mac 桌面端首次启动需客户激活码；激活成功后本地持久化，可离线使用
 - 管理端通过 `/admin/` 生成激活码；默认管理员账号 `admin`，默认密码 `AgentLight@Admin2026`（迁移 `0007_admin_users` 写入，上线后请尽快修改）

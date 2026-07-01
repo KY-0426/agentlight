@@ -46,6 +46,7 @@ const HARDWARE_STATE_EVENT: &str = "hardware-state";
 const AGENT_MONITOR_INTERVAL_MS: u64 = 1_000;
 const MANUAL_STATUS_HOLD_MS: u128 = 60_000;
 const CLOUD_SESSION_FILE_NAME: &str = "cloud-session.json";
+const CLOUD_CONFIG_FILE_NAME: &str = "cloud-config.json";
 const INSTALLATION_ID_FILE_NAME: &str = "installation-id";
 const MAX_CLOUD_URL_LEN: usize = 2048;
 const MAX_CLOUD_TOKEN_LEN: usize = 4096;
@@ -156,6 +157,16 @@ pub(crate) struct CloudSessionSnapshot {
     pub(crate) workspace_id: String,
     pub(crate) device_id: Option<String>,
     pub(crate) installation_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CloudConfig {
+    #[serde(default = "default_cloud_sync_enabled")]
+    cloud_sync_enabled: bool,
+}
+
+fn default_cloud_sync_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1291,6 +1302,8 @@ pub(crate) fn save_cloud_session_impl(request: CloudSessionSnapshot) -> Result<C
     })?;
     restrict_file_to_user(&path)?;
 
+    set_cloud_sync_enabled(true)?;
+
     Ok(request)
 }
 
@@ -1302,13 +1315,41 @@ fn clear_cloud_session() -> Result<(), CommandError> {
 pub(crate) fn clear_cloud_session_impl() -> Result<(), CommandError> {
     let path = cloud_session_path()?;
     match remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(CommandError {
-            code: "cloud_session_clear_failed",
-            message: format!("Could not clear cloud session: {error}"),
-        }),
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(CommandError {
+                code: "cloud_session_clear_failed",
+                message: format!("Could not clear cloud session: {error}"),
+            })
+        }
     }
+    set_cloud_sync_enabled(false)?;
+    sync::clear_usage_queue();
+    Ok(())
+}
+
+#[tauri::command]
+fn refresh_cloud_session(force: bool) -> Result<CloudSessionSnapshot, CommandError> {
+    let Some(session) = load_cloud_session_impl()? else {
+        return Err(CommandError {
+            code: "cloud_session_missing",
+            message: "No cloud session on disk".to_string(),
+        });
+    };
+    if !force && !sync::is_token_expiring_soon(&session) {
+        return Ok(session);
+    }
+    let refreshed = sync::refresh_session_locked(&session).ok_or(CommandError {
+        code: "cloud_session_refresh_failed",
+        message: "Could not refresh cloud session".to_string(),
+    })?;
+    save_cloud_session_impl(refreshed)
+}
+
+#[tauri::command]
+fn get_cloud_sync_enabled() -> Result<bool, CommandError> {
+    Ok(is_cloud_sync_enabled())
 }
 
 #[tauri::command]
@@ -1451,6 +1492,8 @@ fn main() {
             load_cloud_session,
             save_cloud_session,
             clear_cloud_session,
+            refresh_cloud_session,
+            get_cloud_sync_enabled,
             list_ai_tools,
             install_ai_tool,
             sync_ai_tool_connectors,
@@ -1523,6 +1566,77 @@ pub(crate) fn config_dir_path() -> Result<PathBuf, CommandError> {
 
 pub(crate) fn cloud_session_path() -> Result<PathBuf, CommandError> {
     Ok(config_dir_path()?.join(CLOUD_SESSION_FILE_NAME))
+}
+
+fn cloud_config_path() -> Result<PathBuf, CommandError> {
+    Ok(config_dir_path()?.join(CLOUD_CONFIG_FILE_NAME))
+}
+
+fn load_cloud_config() -> Result<CloudConfig, CommandError> {
+    let path = cloud_config_path()?;
+    if !path.exists() {
+        return Ok(CloudConfig {
+            cloud_sync_enabled: default_cloud_sync_enabled(),
+        });
+    }
+    let mut raw = String::new();
+    File::open(&path)
+        .and_then(|mut file| file.read_to_string(&mut raw))
+        .map_err(|error| CommandError {
+            code: "cloud_config_read_failed",
+            message: format!("Could not read cloud config: {error}"),
+        })?;
+    serde_json::from_str(&raw).map_err(|_| CommandError {
+        code: "cloud_config_invalid",
+        message: "Cloud config is not valid JSON".to_string(),
+    })
+}
+
+fn save_cloud_config(config: CloudConfig) -> Result<(), CommandError> {
+    let path = cloud_config_path()?;
+    let dir = path.parent().ok_or(CommandError {
+        code: "cloud_config_path_failed",
+        message: "Could not resolve cloud config directory".to_string(),
+    })?;
+    create_dir_all(dir).map_err(|error| CommandError {
+        code: "cloud_config_write_failed",
+        message: format!("Could not create cloud config directory: {error}"),
+    })?;
+    let json = serde_json::to_string_pretty(&config).map_err(|_| CommandError {
+        code: "cloud_config_write_failed",
+        message: "Could not serialize cloud config".to_string(),
+    })?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .map_err(|error| CommandError {
+            code: "cloud_config_write_failed",
+            message: format!("Could not open cloud config file: {error}"),
+        })?;
+    file.write_all(json.as_bytes()).map_err(|error| CommandError {
+        code: "cloud_config_write_failed",
+        message: format!("Could not write cloud config: {error}"),
+    })?;
+    file.flush().map_err(|error| CommandError {
+        code: "cloud_config_write_failed",
+        message: format!("Could not flush cloud config: {error}"),
+    })?;
+    restrict_file_to_user(&path)?;
+    Ok(())
+}
+
+pub(crate) fn is_cloud_sync_enabled() -> bool {
+    load_cloud_config()
+        .map(|config| config.cloud_sync_enabled)
+        .unwrap_or(true)
+}
+
+pub(crate) fn set_cloud_sync_enabled(enabled: bool) -> Result<(), CommandError> {
+    save_cloud_config(CloudConfig {
+        cloud_sync_enabled: enabled,
+    })
 }
 
 fn installation_id_path() -> Result<PathBuf, CommandError> {

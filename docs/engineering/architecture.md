@@ -75,7 +75,7 @@ flowchart LR
 | 前端 | React 19 + TypeScript | 桌宠、设置面板、状态编排 | `src/App.tsx`、`src/components/**` |
 | 构建 | Vite 7 + TypeScript 5.9 | dev server、前端 build | `package.json` |
 | 测试 | Vitest 4 + cargo test | 前端域、shared、server、Rust 单测 | `vitest.config.ts`、`npm run test:all`、`src-tauri/` |
-| 云服 | Fastify 5 + PostgreSQL + Drizzle | 多用户 auth、排行榜、用量 | `server/`、`compose.yaml` |
+| 云服 | Fastify 5 + MySQL + Drizzle | 多用户 auth、排行榜、用量 | `server/`、`compose.yaml` |
 | CLI | Node.js ESM | 本机命令行状态读写 | `bin/agent-light.mjs` |
 | 资源 | PNG 帧图 | 桌宠动画和虚拟硬件方块 | `public/assets/**` |
 | 固件 | Arduino-ESP32 | ESP32 Mini RGB LED 控制 | `firmware/agent_light_esp32_rgb/**` |

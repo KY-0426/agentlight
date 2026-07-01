@@ -48,7 +48,7 @@ npm run tauri dev
 For cloud server + desktop together:
 
 ```bash
-docker compose up -d
+docker compose up -d mysql
 npm run dev:all
 ```
 
