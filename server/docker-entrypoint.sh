@@ -3,7 +3,7 @@ set -e
 
 if [ -z "$DATABASE_URL" ]; then
   echo "FATAL: DATABASE_URL is required" >&2
-  echo "Example: mysql://user:pass@10.15.108.198:3306/agent_light" >&2
+  echo "Example: mysql://user:pass@host:21534/agent_light" >&2
   exit 1
 fi
 
