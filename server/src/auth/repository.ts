@@ -5,6 +5,7 @@ import { DEVICE_ONLINE_THRESHOLD_MS } from "@agent-light/shared";
 import * as schema from "../db/schema";
 import { countStar, fetchRowById, newRowId, updateRowById } from "../db/query-helpers";
 import { createOpaqueToken, hashOpaqueValue } from "./crypto";
+import { resolveUsageRollupDate, toUsageDateObject } from "../time/shanghai-date";
 
 type Db = MySql2Database<typeof schema>;
 
@@ -1206,8 +1207,8 @@ function buildRollupWhere(db: Db, input: Omit<GetTokenLeaderboardInput, "limit">
   return and(
     eq(schema.dailyUsageRollups.agentProvider, input.agentProvider),
     input.workspaceId ? eq(schema.dailyUsageRollups.workspaceId, input.workspaceId) : undefined,
-    input.fromDate ? gte(schema.dailyUsageRollups.usageDate, parseUsageDate(input.fromDate)) : undefined,
-    input.toDate ? lte(schema.dailyUsageRollups.usageDate, parseUsageDate(input.toDate)) : undefined,
+    input.fromDate ? gte(schema.dailyUsageRollups.usageDate, toUsageDateObject(input.fromDate)) : undefined,
+    input.toDate ? lte(schema.dailyUsageRollups.usageDate, toUsageDateObject(input.toDate)) : undefined,
     exists(
       db
         .select({ id: schema.devices.id })
@@ -1315,7 +1316,7 @@ async function upsertDailyRollup(
       workspaceId: input.workspaceId,
       userId: input.userId,
       agentProvider: input.agentProvider,
-      usageDate: toUsageDate(input.sampledAtMs),
+      usageDate: toUsageDateObject(resolveUsageRollupDate(now)),
       tokensUsed: deltaTokens,
       threadCount: threadCountDelta,
       updatedAt: now,
@@ -1422,16 +1423,6 @@ function mapHardwareDevice(hardwareDevice: typeof schema.hardwareDevices.$inferS
     hardwareRevision: hardwareDevice.hardwareRevision,
     boundAt: hardwareDevice.boundAt,
   };
-}
-
-function toUsageDate(value: number): Date {
-  const date = new Date(value);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function parseUsageDate(value: string): Date {
-  const [year, month, day] = value.split("-").map(Number);
-  return new Date(year, month - 1, day);
 }
 
 function syntheticPhoneEmail(phoneNumber: string): string {

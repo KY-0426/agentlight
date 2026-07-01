@@ -40,6 +40,7 @@ import {
   type ListUsersForAdminResult,
   inferAdminEndUserType,
 } from "./repository";
+import { resolveUsageRollupDate } from "../time/shanghai-date";
 
 type InviteRecord = {
   codeHash: string;
@@ -469,12 +470,13 @@ export class InMemoryAuthRepository implements AuthRepository {
     });
 
     if (deltaTokens > 0 || !existing) {
-      const rollupKey = `${input.workspaceId}:${input.userId}:${input.agentProvider}:${toUsageDate(input.sampledAtMs)}`;
+      const usageDate = resolveUsageRollupDate(new Date());
+      const rollupKey = `${input.workspaceId}:${input.userId}:${input.agentProvider}:${usageDate}`;
       const rollup = this.rollups.get(rollupKey) ?? {
         workspaceId: input.workspaceId,
         userId: input.userId,
         agentProvider: input.agentProvider,
-        usageDate: toUsageDate(input.sampledAtMs),
+        usageDate,
         tokensUsed: 0,
       };
       rollup.tokensUsed += deltaTokens;
@@ -792,10 +794,6 @@ export class InMemoryAuthRepository implements AuthRepository {
 
 function codexThreadKey(input: RecordCodexThreadUsageInput): string {
   return `${input.workspaceId}:${input.userId}:${input.deviceId}:${input.agentProvider}:${input.codexThreadId}`;
-}
-
-function toUsageDate(value: number): string {
-  return new Date(value).toISOString().slice(0, 10);
 }
 
 function syntheticActivationEmail(activationCodeId: string): string {

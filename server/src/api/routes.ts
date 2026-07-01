@@ -19,6 +19,7 @@ import { authenticate, requireWorkspaceMembership, sendError, toUserDto, toWorks
 import { issueTokenPair } from "../auth/tokens";
 import { isBootstrapRateLimited } from "../http/bootstrap-rate-limit";
 import type { ServerEnv } from "../config/env";
+import { parseLeaderboardDateParam } from "../time/shanghai-date";
 
 export type MvpRoutesOptions = {
   env: ServerEnv;
@@ -222,8 +223,8 @@ export async function registerMvpRoutes(app: FastifyInstance, options: MvpRoutes
     const leaderboardInput = {
       agentProvider: parsed.data.agent_provider,
       workspaceId,
-      fromDate: parsed.data.from ? toUsageDate(Date.parse(parsed.data.from)) : undefined,
-      toDate: parsed.data.to ? toUsageDate(Date.parse(parsed.data.to)) : undefined,
+      fromDate: parsed.data.from ? parseLeaderboardDateParam(parsed.data.from) : undefined,
+      toDate: parsed.data.to ? parseLeaderboardDateParam(parsed.data.to) : undefined,
     };
     const [entries, totalTokens, currentUserRank] = await Promise.all([
       repository.getTokenLeaderboard({
@@ -310,6 +311,3 @@ function findForbiddenPayloadKey(value: unknown): string | undefined {
   return undefined;
 }
 
-function toUsageDate(value: number): string {
-  return new Date(value).toISOString().slice(0, 10);
-}
