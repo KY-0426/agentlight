@@ -49,6 +49,7 @@ const CLOUD_SESSION_FILE_NAME: &str = "cloud-session.json";
 const INSTALLATION_ID_FILE_NAME: &str = "installation-id";
 const MAX_CLOUD_URL_LEN: usize = 2048;
 const MAX_CLOUD_TOKEN_LEN: usize = 4096;
+const USER_DISPLAY_NAME_MAX_LEN: usize = 20;
 const SETTINGS_PAGE_EVENT: &str = "agent-settings-page";
 static RUNTIME_SERVICES_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -1239,10 +1240,11 @@ pub(crate) fn load_cloud_session_impl() -> Result<Option<CloudSessionSnapshot>, 
             message: format!("Could not read cloud session: {error}"),
         })?;
 
-    let session = serde_json::from_str::<CloudSessionSnapshot>(&raw).map_err(|_| CommandError {
+    let mut session = serde_json::from_str::<CloudSessionSnapshot>(&raw).map_err(|_| CommandError {
         code: "cloud_session_invalid",
         message: "Cloud session is not valid JSON".to_string(),
     })?;
+    session.display_name = normalize_display_name(&session.display_name);
     validate_cloud_session(&session)?;
     Ok(Some(session))
 }
@@ -1253,6 +1255,8 @@ fn save_cloud_session(request: CloudSessionSnapshot) -> Result<CloudSessionSnaps
 }
 
 pub(crate) fn save_cloud_session_impl(request: CloudSessionSnapshot) -> Result<CloudSessionSnapshot, CommandError> {
+    let mut request = request;
+    request.display_name = normalize_display_name(&request.display_name);
     validate_cloud_session(&request)?;
     let path = cloud_session_path()?;
     let dir = path.parent().ok_or(CommandError {
@@ -1370,6 +1374,26 @@ fn sync_activation_windows(app: &AppHandle) {
 }
 
 #[tauri::command]
+fn open_activation_window(app: AppHandle) -> Result<(), CommandError> {
+    if let Some(activation_window) = app.get_webview_window("activation") {
+        activation_window.show().map_err(|error| CommandError {
+            code: "activation_window_show_failed",
+            message: format!("Could not show activation window: {error}"),
+        })?;
+        activation_window.set_focus().map_err(|error| CommandError {
+            code: "activation_window_focus_failed",
+            message: format!("Could not focus activation window: {error}"),
+        })?;
+        return Ok(());
+    }
+
+    Err(CommandError {
+        code: "activation_window_missing",
+        message: "Activation window is not available".to_string(),
+    })
+}
+
+#[tauri::command]
 fn activate_client(
     app: AppHandle,
     runtime: State<AgentRuntime>,
@@ -1432,6 +1456,8 @@ fn main() {
             sync_ai_tool_connectors,
             list_ai_tool_token_usages,
             activation::get_activation_status,
+            activation::get_activation_record,
+            open_activation_window,
             activate_client,
         ])
         .setup(move |app| {
@@ -1549,6 +1575,10 @@ pub(crate) fn read_or_create_installation_id() -> Result<String, CommandError> {
     Ok(installation_id)
 }
 
+fn normalize_display_name(value: &str) -> String {
+    value.trim().chars().take(USER_DISPLAY_NAME_MAX_LEN).collect()
+}
+
 fn validate_cloud_session(session: &CloudSessionSnapshot) -> Result<(), CommandError> {
     if !is_valid_server_url(&session.server_url) {
         return Err(CommandError {
@@ -1562,7 +1592,7 @@ fn validate_cloud_session(session: &CloudSessionSnapshot) -> Result<(), CommandE
         ("refresh token", session.refresh_token.as_str(), 32, MAX_CLOUD_TOKEN_LEN),
         ("user id", session.user_id.as_str(), 1, 128),
         ("user email", session.user_email.as_str(), 3, 254),
-        ("display name", session.display_name.as_str(), 1, 120),
+        ("display name", session.display_name.as_str(), 1, USER_DISPLAY_NAME_MAX_LEN),
         ("workspace id", session.workspace_id.as_str(), 1, 128),
         ("installation id", session.installation_id.as_str(), 12, 128),
     ] {

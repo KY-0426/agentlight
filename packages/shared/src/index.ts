@@ -68,6 +68,11 @@ export function formatTokenCount(value: number | null | undefined): string {
   return `${normalized}`;
 }
 
+export const USER_DISPLAY_NAME_MAX_LENGTH = 20;
+
+export const userDisplayNameSchema = z.string().trim().min(1).max(USER_DISPLAY_NAME_MAX_LENGTH);
+export const userDisplayNameDtoSchema = z.string().min(1).max(USER_DISPLAY_NAME_MAX_LENGTH);
+
 export const uuidSchema = z.uuid();
 export const isoDateStringSchema = z.iso.datetime({ offset: true });
 export const emailSchema = z.email().max(254);
@@ -111,7 +116,7 @@ export const userDtoSchema = z.object({
   id: uuidSchema,
   email: emailSchema,
   phone_number: phoneNumberSchema.nullable(),
-  display_name: z.string().min(1).max(120),
+  display_name: userDisplayNameDtoSchema,
   created_at: isoDateStringSchema,
 });
 export type UserDto = z.infer<typeof userDtoSchema>;
@@ -135,7 +140,7 @@ export const registerRequestSchema = z.object({
   invite_code: inviteCodeSchema,
   email: emailSchema,
   password: passwordSchema,
-  display_name: z.string().trim().min(1).max(120),
+  display_name: userDisplayNameSchema,
 }).strict();
 export type RegisterRequest = z.infer<typeof registerRequestSchema>;
 
@@ -155,7 +160,7 @@ export type SendPhoneVerificationCodeResponse = z.infer<typeof sendPhoneVerifica
 export const verifyPhoneLoginRequestSchema = z.object({
   phone_number: phoneNumberSchema,
   verification_code: phoneVerificationCodeSchema,
-  display_name: z.string().trim().min(1).max(120).optional(),
+  display_name: userDisplayNameSchema.optional(),
 }).strict();
 export type VerifyPhoneLoginRequest = z.infer<typeof verifyPhoneLoginRequestSchema>;
 
@@ -205,7 +210,7 @@ export const meResponseSchema = z.object({
 export type MeResponse = z.infer<typeof meResponseSchema>;
 
 export const updateProfileRequestSchema = z.object({
-  display_name: z.string().trim().min(1).max(120),
+  display_name: userDisplayNameSchema,
 }).strict();
 export type UpdateProfileRequest = z.infer<typeof updateProfileRequestSchema>;
 
@@ -304,7 +309,7 @@ export const adminEndUserDtoSchema = z.object({
   id: uuidSchema,
   email: emailSchema,
   phone_number: phoneNumberSchema.nullable(),
-  display_name: z.string().min(1).max(120),
+  display_name: userDisplayNameDtoSchema,
   user_type: adminEndUserTypeSchema,
   disabled_at: isoDateStringSchema.nullable(),
   device_count: z.number().int().nonnegative(),
@@ -467,7 +472,7 @@ export type LeaderboardTokensQuery = z.infer<typeof leaderboardTokensQuerySchema
 
 export const leaderboardTokensEntrySchema = z.object({
   user_id: uuidSchema,
-  display_name: z.string().min(1).max(120),
+  display_name: userDisplayNameDtoSchema,
   tokens_used: z.number().int().nonnegative(),
   rank: z.number().int().positive(),
 });

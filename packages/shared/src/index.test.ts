@@ -84,6 +84,14 @@ describe("shared schemas", () => {
     ).toMatchObject({ display_name: "新昵称" });
   });
 
+  it("rejects profile display names longer than 20 characters", () => {
+    expect(() =>
+      updateProfileRequestSchema.parse({
+        display_name: "a".repeat(21),
+      }),
+    ).toThrow();
+  });
+
   it("defaults usage and leaderboard agent provider to Codex", () => {
     expect(
       codexThreadUsageRequestSchema.parse({

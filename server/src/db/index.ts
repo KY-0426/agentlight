@@ -1,15 +1,13 @@
-import { drizzle } from "drizzle-orm/node-postgres";
-import pg from "pg";
+import { drizzle } from "drizzle-orm/mysql2";
+import mysql from "mysql2/promise";
 import { loadEnv } from "../config/env";
 import * as schema from "./schema";
 
 export function createDb(env = loadEnv()) {
-  const pool = new pg.Pool({
-    connectionString: env.databaseUrl,
-  });
+  const pool = mysql.createPool(env.databaseUrl);
 
   return {
-    db: drizzle(pool, { schema }),
+    db: drizzle(pool, { schema, mode: "default" }),
     pool,
   };
 }

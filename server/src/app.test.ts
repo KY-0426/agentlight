@@ -4,7 +4,7 @@ import { buildApp, buildLoggerOptions } from "./app";
 const testEnv = {
   NODE_ENV: "test",
   LOG_LEVEL: "silent",
-  DATABASE_URL: "postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light",
+  DATABASE_URL: "mysql://agent_light:agent_light@127.0.0.1:3306/agent_light",
 };
 
 describe("server app", () => {
@@ -108,7 +108,7 @@ describe("server app", () => {
       host: "127.0.0.1",
       port: 8787,
       logLevel: "info",
-      databaseUrl: "postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light",
+      databaseUrl: "mysql://agent_light:agent_light@127.0.0.1:3306/agent_light",
       accessTokenSecret: "a".repeat(32),
       refreshTokenSecret: "b".repeat(32),
       activationSigningSecret: "d".repeat(32),

@@ -153,6 +153,10 @@ pub fn activate_client(server_url: String, activation_code: String) -> Result<Ac
     Ok(record)
 }
 
+pub fn load_activation_record() -> Result<Option<ActivationRecord>, CommandError> {
+    read_activation_record()
+}
+
 fn read_activation_record() -> Result<Option<ActivationRecord>, CommandError> {
     let path = activation_path()?;
     if !path.is_file() {
@@ -253,4 +257,9 @@ fn parse_api_error(response: ureq::Response) -> CommandError {
 #[tauri::command]
 pub fn get_activation_status() -> Result<bool, CommandError> {
     is_client_activated()
+}
+
+#[tauri::command]
+pub fn get_activation_record() -> Result<Option<ActivationRecord>, CommandError> {
+    load_activation_record()
 }

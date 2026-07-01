@@ -1,5 +1,5 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
-import { formatTokenCount } from "@agent-light/shared";
+import { formatTokenCount, USER_DISPLAY_NAME_MAX_LENGTH } from "@agent-light/shared";
 import { useGuardedClick } from "../hooks/useGuardedClick";
 import type { AgentState, AgentStatusEvent } from "../domain/status";
 import type { LightSettings } from "../domain/status";
@@ -24,6 +24,10 @@ import {
   agentProviderLabels,
   agentProviderOrder,
   resolveDefaultCloudServerUrl,
+  loadActivationRecord,
+  getActivationStatus,
+  openActivationWindow,
+  resolveActivationServerUrl,
   isDeviceCloudAccount,
   leaderboardTimePeriodLabels,
   leaderboardTimePeriodOrder,
@@ -543,7 +547,7 @@ function AccountPanel({
   }, [cloudSession?.display_name, editingName]);
 
   if (!cloudSession) {
-    return <CloudConnectPanel cloudSyncStatus={cloudSyncStatus} onConnectCloud={onConnectCloud} />;
+    return <CloudConnectPanel onConnectCloud={onConnectCloud} />;
   }
 
   async function saveDisplayName() {
@@ -554,6 +558,10 @@ function AccountPanel({
     const nextName = draftName.trim();
     if (!nextName) {
       setNameError("用户名不能为空");
+      return;
+    }
+    if (nextName.length > USER_DISPLAY_NAME_MAX_LENGTH) {
+      setNameError(`用户名不能超过 ${USER_DISPLAY_NAME_MAX_LENGTH} 个字符`);
       return;
     }
     if (nextName === cloudSession.display_name) {
@@ -599,7 +607,7 @@ function AccountPanel({
                     value={draftName}
                     onChange={(event) => setDraftName(event.target.value)}
                     autoComplete="nickname"
-                    maxLength={120}
+                    maxLength={USER_DISPLAY_NAME_MAX_LENGTH}
                     disabled={savingName}
                     autoFocus
                   />
@@ -669,29 +677,71 @@ function AccountPanel({
 }
 
 function CloudConnectPanel({
-  cloudSyncStatus,
   onConnectCloud,
 }: {
-  cloudSyncStatus: CloudSyncStatus;
   onConnectCloud: (serverUrl: string) => Promise<void>;
 }) {
   const [serverUrl, setServerUrl] = useState(resolveDefaultCloudServerUrl);
   const [showDevOptions, setShowDevOptions] = useState(false);
   const [connectStatus, setConnectStatus] = useState<"idle" | "submitting" | "error">("idle");
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [isActivatedLocally, setIsActivatedLocally] = useState<boolean | null>(null);
+  const [hasActivationRecord, setHasActivationRecord] = useState(false);
+
+  useEffect(() => {
+    void (async () => {
+      const [activated, record] = await Promise.all([getActivationStatus(), loadActivationRecord()]);
+      setIsActivatedLocally(activated);
+      setHasActivationRecord(Boolean(record?.receipt));
+      const fromActivation = record?.server_url?.trim();
+      if (fromActivation) {
+        setServerUrl(fromActivation);
+      }
+    })();
+  }, []);
+
+  const openActivationClick = useGuardedClick(async () => {
+    setConnectError(null);
+    try {
+      await openActivationWindow();
+    } catch (error) {
+      setConnectStatus("error");
+      setConnectError(error instanceof Error ? error.message : "无法打开激活窗口");
+    }
+  });
+
   const connectClick = useGuardedClick(async () => {
     setConnectStatus("submitting");
     setConnectError(null);
     try {
-      await onConnectCloud(serverUrl);
+      const activated = await getActivationStatus();
+      const record = await loadActivationRecord();
+      setHasActivationRecord(Boolean(record?.receipt));
+      if (!record?.receipt) {
+        setConnectStatus("error");
+        setConnectError(
+          activated
+            ? "开发模式已跳过本地激活检查，云端同步仍需输入激活码完成联网校验"
+            : "请先完成激活，再开启云端同步",
+        );
+        return;
+      }
+      const resolvedUrl = await resolveActivationServerUrl(serverUrl);
+      await onConnectCloud(resolvedUrl);
       setConnectStatus("idle");
     } catch (error) {
       setConnectStatus("error");
-      setConnectError(error instanceof Error ? error.message : "云端连接失败，请稍后重试");
+      const record = await loadActivationRecord();
+      setHasActivationRecord(Boolean(record?.receipt));
+      setConnectError(formatCloudConnectError(error, Boolean(record?.receipt)));
     }
   });
 
-  const isConnecting = connectStatus === "submitting" || connectClick.busy || cloudSyncStatus.state === "syncing";
+  const isConnecting = connectStatus === "submitting" || connectClick.busy;
+  const showReactivate =
+    isActivatedLocally === false ||
+    !hasActivationRecord ||
+    (connectStatus === "error" && connectError !== null && isActivationRecoveryHint(connectError));
 
   return (
     <div className="settings-body settings-body--connect">
@@ -700,30 +750,29 @@ function CloudConnectPanel({
           <h2 id="cloud-connect-heading">云端同步</h2>
         </div>
         <p className="cloud-connect-panel__intro">
-          开启后 AI 用量会自动同步，并参与排行榜。桌宠的本地功能无需联网也能正常使用。
+          开启后 AI 用量会自动同步，并参与排行榜。将自动连接你激活时使用的线上服务；桌宠本地功能无需联网。
         </p>
         <div className="leaderboard-form">
-          <label className="leaderboard-field">
-            <span>服务端地址</span>
-            <input
-              type="url"
-              value={serverUrl}
-              onChange={(event) => setServerUrl(event.target.value)}
-              placeholder={resolveDefaultCloudServerUrl()}
-              autoComplete="url"
-              spellCheck={false}
-            />
-          </label>
           <button
             className="leaderboard-refresh"
             type="button"
-            disabled={isConnecting || !serverUrl.trim()}
+            disabled={isConnecting}
             onClick={() => connectClick.onClick()}
           >
             {isConnecting ? "连接中…" : "开启云端同步"}
           </button>
           {connectStatus === "error" && connectError ? (
             <p className="leaderboard-error">{connectError}</p>
+          ) : null}
+          {showReactivate ? (
+            <button
+              className="leaderboard-refresh leaderboard-refresh--secondary"
+              type="button"
+              disabled={openActivationClick.busy}
+              onClick={() => openActivationClick.onClick()}
+            >
+              {openActivationClick.busy ? "打开中…" : "重新激活"}
+            </button>
           ) : null}
           {IS_DEV_BUILD ? (
             <div className="cloud-connect-panel__help">
@@ -736,6 +785,18 @@ function CloudConnectPanel({
               </button>
               {showDevOptions ? (
                 <>
+                  <label className="leaderboard-field">
+                    <span>服务端地址（仅本地调试）</span>
+                    <input
+                      type="url"
+                      value={serverUrl}
+                      onChange={(event) => setServerUrl(event.target.value)}
+                      placeholder={resolveDefaultCloudServerUrl()}
+                      autoComplete="url"
+                      spellCheck={false}
+                    />
+                  </label>
+                  <p className="leaderboard-note">已激活用户会优先使用激活记录中的地址，此处仅作无激活记录时的兜底。</p>
                   <p className="leaderboard-note">本地开发请先启动服务：</p>
                   <pre className="cloud-connect-panel__commands">npm run server:dev</pre>
                   <p className="leaderboard-note">若使用 PostgreSQL，还需：</p>
@@ -854,6 +915,7 @@ function PhoneBindPanel({
               onChange={(event) => setDisplayName(event.target.value)}
               autoComplete="name"
               placeholder="可选"
+              maxLength={USER_DISPLAY_NAME_MAX_LENGTH}
             />
           </label>
           <button className="leaderboard-refresh" type="submit" disabled={bindStatus === "submitting"}>
@@ -1434,4 +1496,28 @@ function formatHardwareTroubleshooting(snapshot: HardwareStatusSnapshot | null) 
     envHint,
     steps: IS_DEV_BUILD ? devSteps : userSteps,
   };
+}
+
+function isActivationRecoveryHint(message: string): boolean {
+  return (
+    message.includes("activation_code_required") ||
+    message.includes("Device must be activated") ||
+    message.includes("云端找不到本机") ||
+    message.includes("请先完成激活") ||
+    message.includes("联网校验")
+  );
+}
+
+function formatCloudConnectError(error: unknown, hasActivationRecord: boolean): string {
+  if (error instanceof Error) {
+    const message = error.message.trim();
+    if (message.includes("activation_code_required") || message.includes("Device must be activated")) {
+      if (hasActivationRecord) {
+        return "云端找不到本机激活记录，请点击下方「重新激活」恢复同步";
+      }
+      return "请先完成激活，再开启云端同步";
+    }
+    return message || "云端连接失败，请稍后重试";
+  }
+  return "云端连接失败，请稍后重试";
 }

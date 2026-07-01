@@ -1,68 +1,19 @@
 {
   "version": "7",
-  "dialect": "postgresql",
+  "dialect": "mysql",
   "entries": [
     {
       "idx": 0,
-      "version": "7",
-      "when": 1782216293659,
-      "tag": "0000_spooky_wallow",
+      "version": "0",
+      "when": 1751328000000,
+      "tag": "0000_mysql_initial",
       "breakpoints": true
     },
     {
       "idx": 1,
-      "version": "7",
-      "when": 1782302400000,
-      "tag": "0001_agent_provider_phone_registration",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1782664000000,
-      "tag": "0002_add_cursor_agent_provider",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1782750400000,
-      "tag": "0003_extend_agent_providers",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1782836800000,
-      "tag": "0004_add_kiro_devin_agent_providers",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1782923200000,
-      "tag": "0005_add_trae_qoder_cn_agent_providers",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1783009600000,
-      "tag": "0006_activation_codes",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1783096000000,
-      "tag": "0007_admin_users",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1783182400000,
-      "tag": "0008_activation_user_link",
+      "version": "0",
+      "when": 1751414400000,
+      "tag": "0001_user_display_name_max_20",
       "breakpoints": true
     }
   ]

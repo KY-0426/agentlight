@@ -48,7 +48,7 @@ export function ActivationScreen({ onActivated }: ActivationScreenProps) {
         <p className="activation-card__eyebrow">Agent Light</p>
         <h1 id="activation-heading">激活客户端</h1>
         <p className="activation-card__lead">
-          首次使用请输入客户激活码。激活成功后本机可离线使用桌宠、本地 API 与 CLI。
+          首次使用请输入客户激活码。激活码会联网校验（需访问线上服务），成功后本机可离线使用桌宠、本地 API 与 CLI。
         </p>
         <form className="activation-form" onSubmit={(event) => void submit(event)}>
           <label className="activation-field">

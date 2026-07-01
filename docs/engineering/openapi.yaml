@@ -289,7 +289,7 @@ paths:
               type: object
               required: [display_name]
               properties:
-                display_name: { type: string, minLength: 1, maxLength: 120 }
+                display_name: { type: string, minLength: 1, maxLength: 20 }
       responses:
         '200':
           description: 更新后的用户信息

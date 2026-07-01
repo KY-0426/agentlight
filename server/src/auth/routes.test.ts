@@ -5,7 +5,7 @@ import { InMemoryAuthRepository } from "./in-memory-repository";
 const testEnv = {
   NODE_ENV: "test",
   LOG_LEVEL: "silent",
-  DATABASE_URL: "postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light",
+  DATABASE_URL: "mysql://agent_light:agent_light@127.0.0.1:3306/agent_light",
   ACCESS_TOKEN_SECRET: "a".repeat(32),
   REFRESH_TOKEN_SECRET: "b".repeat(32),
 };
@@ -60,6 +60,19 @@ describe("auth routes", () => {
 
     expect(renamed.statusCode).toBe(200);
     expect(renamed.json().data.user.display_name).toBe("Renamed User");
+
+    const tooLong = await app.inject({
+      method: "PATCH",
+      url: "/api/me",
+      headers: {
+        authorization: `Bearer ${body.data.access_token}`,
+      },
+      payload: {
+        display_name: "a".repeat(21),
+      },
+    });
+
+    expect(tooLong.statusCode).toBe(400);
 
     await app.close();
   });

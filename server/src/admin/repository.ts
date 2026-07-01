@@ -1,10 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { desc, eq, sql } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { ApiErrorCode } from "@agent-light/shared";
 import * as schema from "../db/schema";
+import { countStar, fetchRowById, newRowId, updateRowById } from "../db/query-helpers";
 
-type Db = NodePgDatabase<typeof schema>;
+type Db = MySql2Database<typeof schema>;
 
 export type AdminUserRecord = {
   id: string;
@@ -60,10 +60,11 @@ export class DrizzleAdminRepository implements AdminRepository {
   constructor(private readonly db: Db) {}
 
   async findAdminByUsername(username: string): Promise<AdminUserRecord | undefined> {
+    const normalized = username.trim().toLowerCase();
     const rows = await this.db
       .select()
       .from(schema.adminUsers)
-      .where(sql`lower(${schema.adminUsers.username}) = lower(${username})`)
+      .where(sql`lower(${schema.adminUsers.username}) = ${normalized}`)
       .limit(1);
 
     const row = rows[0];
@@ -77,7 +78,7 @@ export class DrizzleAdminRepository implements AdminRepository {
   }
 
   async listAdmins(input: ListAdminsInput): Promise<ListAdminsResult> {
-    const [countRow] = await this.db.select({ total: sql<number>`count(*)::int` }).from(schema.adminUsers);
+    const [countRow] = await this.db.select({ total: countStar }).from(schema.adminUsers);
 
     const rows = await this.db
       .select()
@@ -93,24 +94,28 @@ export class DrizzleAdminRepository implements AdminRepository {
   }
 
   async createAdmin(input: CreateAdminInput): Promise<AdminUserRecord> {
+    const normalizedUsername = input.username.trim().toLowerCase();
     const [existing] = await this.db
       .select({ id: schema.adminUsers.id })
       .from(schema.adminUsers)
-      .where(sql`lower(${schema.adminUsers.username}) = lower(${input.username})`)
+      .where(sql`lower(${schema.adminUsers.username}) = ${normalizedUsername}`)
       .limit(1);
 
     if (existing) {
       throw new AdminRepositoryError("conflict", "Admin username already exists", 409);
     }
 
-    const [row] = await this.db
-      .insert(schema.adminUsers)
-      .values({
-        username: input.username,
-        passwordHash: input.passwordHash,
-        displayName: input.displayName,
-      })
-      .returning();
+    const adminId = newRowId();
+    await this.db.insert(schema.adminUsers).values({
+      id: adminId,
+      username: normalizedUsername,
+      passwordHash: input.passwordHash,
+      displayName: input.displayName,
+    });
+    const row = await fetchRowById<typeof schema.adminUsers.$inferSelect>(this.db, schema.adminUsers, adminId);
+    if (!row) {
+      throw new AdminRepositoryError("internal_error", "Admin insert failed", 500);
+    }
 
     return toAdminUserRecord(row);
   }
@@ -121,15 +126,11 @@ export class DrizzleAdminRepository implements AdminRepository {
       throw new AdminRepositoryError("not_found", "Admin account not found", 404);
     }
 
-    const [row] = await this.db
-      .update(schema.adminUsers)
-      .set({
-        displayName: input.displayName ?? existing.displayName,
-        passwordHash: input.passwordHash ?? existing.passwordHash,
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.adminUsers.id, id))
-      .returning();
+    const row = await updateRowById<typeof schema.adminUsers.$inferSelect>(this.db, schema.adminUsers, id, {
+      displayName: input.displayName ?? existing.displayName,
+      passwordHash: input.passwordHash ?? existing.passwordHash,
+      updatedAt: new Date(),
+    });
 
     return toAdminUserRecord(row);
   }
@@ -140,19 +141,17 @@ export class DrizzleAdminRepository implements AdminRepository {
       throw new AdminRepositoryError("not_found", "Admin account not found", 404);
     }
 
-    const disabledAt = disabled ? new Date() : null;
-    const [row] = await this.db
-      .update(schema.adminUsers)
-      .set({ disabledAt, updatedAt: new Date() })
-      .where(eq(schema.adminUsers.id, id))
-      .returning();
+    const row = await updateRowById<typeof schema.adminUsers.$inferSelect>(this.db, schema.adminUsers, id, {
+      disabledAt: disabled ? new Date() : null,
+      updatedAt: new Date(),
+    });
 
     return toAdminUserRecord(row);
   }
 
   async countActiveAdmins(): Promise<number> {
     const [countRow] = await this.db
-      .select({ total: sql<number>`count(*)::int` })
+      .select({ total: countStar })
       .from(schema.adminUsers)
       .where(sql`${schema.adminUsers.disabledAt} is null`);
 
@@ -194,15 +193,15 @@ export class InMemoryAdminRepository implements AdminRepository {
     }
 
     const record: AdminUserRecord = {
-      id: randomUUID(),
-      username: input.username,
+      id: newRowId(),
+      username: input.username.trim().toLowerCase(),
       passwordHash: input.passwordHash,
       displayName: input.displayName,
       disabledAt: null,
       createdAt: new Date(),
     };
     this.users.set(record.id, record);
-    this.usersByUsername.set(record.username.toLowerCase(), record.id);
+    this.usersByUsername.set(record.username, record.id);
     return record;
   }
 

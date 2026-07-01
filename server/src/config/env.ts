@@ -13,7 +13,7 @@ const rawEnvSchema = z
     DATABASE_URL: z
       .string()
       .url()
-      .default("postgresql://agent_light:agent_light@127.0.0.1:5432/agent_light"),
+      .default("mysql://agent_light:agent_light@127.0.0.1:3306/agent_light"),
     ACCESS_TOKEN_SECRET: z.string().min(32).optional(),
     REFRESH_TOKEN_SECRET: z.string().min(32).optional(),
     ACTIVATION_SIGNING_SECRET: z.string().min(32).optional(),

@@ -1,11 +1,12 @@
-import { and, desc, eq, exists, gt, gte, ilike, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { and, desc, eq, exists, gt, gte, isNotNull, isNull, like, lte, or, sql } from "drizzle-orm";
+import type { MySql2Database } from "drizzle-orm/mysql2";
 import type { AgentProvider, ApiErrorCode, DesktopPlatform, WorkspaceRole } from "@agent-light/shared";
 import { DEVICE_ONLINE_THRESHOLD_MS } from "@agent-light/shared";
 import * as schema from "../db/schema";
+import { countStar, fetchRowById, newRowId, updateRowById } from "../db/query-helpers";
 import { createOpaqueToken, hashOpaqueValue } from "./crypto";
 
-type Db = NodePgDatabase<typeof schema>;
+type Db = MySql2Database<typeof schema>;
 
 export type UserRecord = {
   id: string;
@@ -345,24 +346,37 @@ export class DrizzleAuthRepository implements AuthRepository {
         throw new AuthRepositoryError("conflict", "Email already registered", 409);
       }
 
-      const [user] = await tx
-        .insert(schema.users)
-        .values({
-          email: input.email,
-          passwordHash: input.passwordHash,
-          displayName: input.displayName,
-        })
-        .returning();
+      const userId = newRowId();
+      await tx.insert(schema.users).values({
+        id: userId,
+        email: input.email,
+        passwordHash: input.passwordHash,
+        displayName: input.displayName,
+      });
+      const user = await fetchRowById<typeof schema.users.$inferSelect>(tx, schema.users, userId);
+      if (!user) {
+        throw new AuthRepositoryError("internal_error", "User insert failed", 500);
+      }
       const workspaceName = `${input.displayName}'s Workspace`;
-      const [workspace] = await tx.insert(schema.workspaces).values({ name: workspaceName }).returning();
+      const workspaceId = newRowId();
+      await tx.insert(schema.workspaces).values({ id: workspaceId, name: workspaceName });
+      const workspace = await fetchRowById<typeof schema.workspaces.$inferSelect>(tx, schema.workspaces, workspaceId);
+      if (!workspace) {
+        throw new AuthRepositoryError("internal_error", "Workspace insert failed", 500);
+      }
+      await tx.insert(schema.workspaceMembers).values({
+        workspaceId: workspace.id,
+        userId: user.id,
+        role: "owner",
+      });
       const [membership] = await tx
-        .insert(schema.workspaceMembers)
-        .values({
-          workspaceId: workspace.id,
-          userId: user.id,
-          role: "owner",
-        })
-        .returning();
+        .select()
+        .from(schema.workspaceMembers)
+        .where(and(eq(schema.workspaceMembers.workspaceId, workspace.id), eq(schema.workspaceMembers.userId, user.id)))
+        .limit(1);
+      if (!membership) {
+        throw new AuthRepositoryError("internal_error", "Membership insert failed", 500);
+      }
 
       await tx
         .update(schema.inviteCodes)
@@ -470,24 +484,37 @@ export class DrizzleAuthRepository implements AuthRepository {
         };
       }
 
-      const [user] = await tx
-        .insert(schema.users)
-        .values({
-          email: syntheticPhoneEmail(input.phoneNumber),
-          phoneNumber: input.phoneNumber,
-          passwordHash: input.passwordHash,
-          displayName: input.displayName,
-        })
-        .returning();
-      const [workspace] = await tx.insert(schema.workspaces).values({ name: `${input.displayName}'s Workspace` }).returning();
+      const userId = newRowId();
+      await tx.insert(schema.users).values({
+        id: userId,
+        email: syntheticPhoneEmail(input.phoneNumber),
+        phoneNumber: input.phoneNumber,
+        passwordHash: input.passwordHash,
+        displayName: input.displayName,
+      });
+      const user = await fetchRowById<typeof schema.users.$inferSelect>(tx, schema.users, userId);
+      if (!user) {
+        throw new AuthRepositoryError("internal_error", "User insert failed", 500);
+      }
+      const workspaceId = newRowId();
+      await tx.insert(schema.workspaces).values({ id: workspaceId, name: `${input.displayName}'s Workspace` });
+      const workspace = await fetchRowById<typeof schema.workspaces.$inferSelect>(tx, schema.workspaces, workspaceId);
+      if (!workspace) {
+        throw new AuthRepositoryError("internal_error", "Workspace insert failed", 500);
+      }
+      await tx.insert(schema.workspaceMembers).values({
+        workspaceId: workspace.id,
+        userId: user.id,
+        role: "owner",
+      });
       const [membership] = await tx
-        .insert(schema.workspaceMembers)
-        .values({
-          workspaceId: workspace.id,
-          userId: user.id,
-          role: "owner",
-        })
-        .returning();
+        .select()
+        .from(schema.workspaceMembers)
+        .where(and(eq(schema.workspaceMembers.workspaceId, workspace.id), eq(schema.workspaceMembers.userId, user.id)))
+        .limit(1);
+      if (!membership) {
+        throw new AuthRepositoryError("internal_error", "Membership insert failed", 500);
+      }
 
       return {
         user: mapUser(user),
@@ -518,18 +545,10 @@ export class DrizzleAuthRepository implements AuthRepository {
   }
 
   async updateUserDisplayName(userId: string, displayName: string): Promise<UserRecord> {
-    const [user] = await this.db
-      .update(schema.users)
-      .set({
-        displayName: displayName.trim(),
-        updatedAt: new Date(),
-      })
-      .where(eq(schema.users.id, userId))
-      .returning();
-
-    if (!user) {
-      throw new AuthRepositoryError("not_found", "User not found", 404);
-    }
+    const user = await updateRowById<typeof schema.users.$inferSelect>(this.db, schema.users, userId, {
+      displayName: displayName.trim(),
+      updatedAt: new Date(),
+    });
 
     return mapUser(user);
   }
@@ -589,17 +608,13 @@ export class DrizzleAuthRepository implements AuthRepository {
           throw new AuthRepositoryError("unauthorized", "Device owner is unavailable", 401);
         }
 
-        const [device] = await tx
-          .update(schema.devices)
-          .set({
-            platform: input.platform,
-            appVersion: input.appVersion,
-            deviceLabel: input.deviceLabel ?? existingDevice.deviceLabel,
-            lastSeenAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(schema.devices.id, existingDevice.id))
-          .returning();
+        const device = await updateRowById<typeof schema.devices.$inferSelect>(tx, schema.devices, existingDevice.id, {
+          platform: input.platform,
+          appVersion: input.appVersion,
+          deviceLabel: input.deviceLabel ?? existingDevice.deviceLabel,
+          lastSeenAt: new Date(),
+          updatedAt: new Date(),
+        });
 
         return {
           identity: {
@@ -629,10 +644,12 @@ export class DrizzleAuthRepository implements AuthRepository {
       const memberships = await listMemberships(tx, user.id);
       let workspaceId = memberships[0]?.membership.workspaceId;
       if (!workspaceId) {
-        const [workspace] = await tx
-          .insert(schema.workspaces)
-          .values({ name: `${user.displayName} 的工作空间` })
-          .returning();
+        const newWorkspaceId = newRowId();
+        await tx.insert(schema.workspaces).values({ id: newWorkspaceId, name: `${user.displayName} 的工作空间` });
+        const workspace = await fetchRowById<typeof schema.workspaces.$inferSelect>(tx, schema.workspaces, newWorkspaceId);
+        if (!workspace) {
+          throw new AuthRepositoryError("internal_error", "Workspace insert failed", 500);
+        }
         await tx.insert(schema.workspaceMembers).values({
           workspaceId: workspace.id,
           userId: user.id,
@@ -641,18 +658,21 @@ export class DrizzleAuthRepository implements AuthRepository {
         workspaceId = workspace.id;
       }
 
-      const [device] = await tx
-        .insert(schema.devices)
-        .values({
-          workspaceId,
-          userId: user.id,
-          installationId: input.installationId,
-          platform: input.platform,
-          appVersion: input.appVersion,
-          deviceLabel: input.deviceLabel ?? user.displayName,
-          lastSeenAt: new Date(),
-        })
-        .returning();
+      const deviceId = newRowId();
+      await tx.insert(schema.devices).values({
+        id: deviceId,
+        workspaceId,
+        userId: user.id,
+        installationId: input.installationId,
+        platform: input.platform,
+        appVersion: input.appVersion,
+        deviceLabel: input.deviceLabel ?? user.displayName,
+        lastSeenAt: new Date(),
+      });
+      const device = await fetchRowById<typeof schema.devices.$inferSelect>(tx, schema.devices, deviceId);
+      if (!device) {
+        throw new AuthRepositoryError("internal_error", "Device insert failed", 500);
+      }
 
       return {
         identity: {
@@ -678,32 +698,31 @@ export class DrizzleAuthRepository implements AuthRepository {
     }
 
     if (existing) {
-      const [device] = await this.db
-        .update(schema.devices)
-        .set({
-          platform: input.platform,
-          appVersion: input.appVersion,
-          deviceLabel: input.deviceLabel ?? existing.deviceLabel,
-          lastSeenAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(schema.devices.id, existing.id))
-        .returning();
+      const device = await updateRowById<typeof schema.devices.$inferSelect>(this.db, schema.devices, existing.id, {
+        platform: input.platform,
+        appVersion: input.appVersion,
+        deviceLabel: input.deviceLabel ?? existing.deviceLabel,
+        lastSeenAt: new Date(),
+        updatedAt: new Date(),
+      });
       return mapDevice(device);
     }
 
-    const [device] = await this.db
-      .insert(schema.devices)
-      .values({
-        workspaceId: input.workspaceId,
-        userId: input.userId,
-        installationId: input.installationId,
-        platform: input.platform,
-        appVersion: input.appVersion,
-        deviceLabel: input.deviceLabel,
-        lastSeenAt: new Date(),
-      })
-      .returning();
+    const deviceId = newRowId();
+    await this.db.insert(schema.devices).values({
+      id: deviceId,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      installationId: input.installationId,
+      platform: input.platform,
+      appVersion: input.appVersion,
+      deviceLabel: input.deviceLabel,
+      lastSeenAt: new Date(),
+    });
+    const device = await fetchRowById<typeof schema.devices.$inferSelect>(this.db, schema.devices, deviceId);
+    if (!device) {
+      throw new AuthRepositoryError("internal_error", "Device insert failed", 500);
+    }
 
     return mapDevice(device);
   }
@@ -731,30 +750,38 @@ export class DrizzleAuthRepository implements AuthRepository {
       }
 
       if (existing) {
-        const [hardwareDevice] = await tx
-          .update(schema.hardwareDevices)
-          .set({
+        const hardwareDevice = await updateRowById<typeof schema.hardwareDevices.$inferSelect>(
+          tx,
+          schema.hardwareDevices,
+          existing.id,
+          {
             firmwareVersion: input.firmwareVersion,
             protocolVersion: input.protocolVersion,
             hardwareRevision: input.hardwareRevision,
             updatedAt: new Date(),
-          })
-          .where(eq(schema.hardwareDevices.id, existing.id))
-          .returning();
+          },
+        );
         return mapHardwareDevice(hardwareDevice);
       }
 
-      const [hardwareDevice] = await tx
-        .insert(schema.hardwareDevices)
-        .values({
-          workspaceId: device.workspaceId,
-          deviceId: device.id,
-          hardwareDeviceId: input.hardwareDeviceId,
-          firmwareVersion: input.firmwareVersion,
-          protocolVersion: input.protocolVersion,
-          hardwareRevision: input.hardwareRevision,
-        })
-        .returning();
+      const hardwareId = newRowId();
+      await tx.insert(schema.hardwareDevices).values({
+        id: hardwareId,
+        workspaceId: device.workspaceId,
+        deviceId: device.id,
+        hardwareDeviceId: input.hardwareDeviceId,
+        firmwareVersion: input.firmwareVersion,
+        protocolVersion: input.protocolVersion,
+        hardwareRevision: input.hardwareRevision,
+      });
+      const hardwareDevice = await fetchRowById<typeof schema.hardwareDevices.$inferSelect>(
+        tx,
+        schema.hardwareDevices,
+        hardwareId,
+      );
+      if (!hardwareDevice) {
+        throw new AuthRepositoryError("internal_error", "Hardware device insert failed", 500);
+      }
 
       return mapHardwareDevice(hardwareDevice);
     });
@@ -915,25 +942,30 @@ export class DrizzleAuthRepository implements AuthRepository {
 
       const now = new Date();
       const displayName = generateRandomDisplayName();
-      const [user] = await tx
-        .insert(schema.users)
-        .values({
-          email: syntheticActivationEmail(code.id),
-          passwordHash: input.passwordHash,
-          displayName,
-        })
-        .returning();
-      const [workspace] = await tx
-        .insert(schema.workspaces)
-        .values({ name: `${displayName} 的工作空间` })
-        .returning();
+      const userId = newRowId();
+      await tx.insert(schema.users).values({
+        id: userId,
+        email: syntheticActivationEmail(code.id),
+        passwordHash: input.passwordHash,
+        displayName,
+      });
+      const user = await fetchRowById<typeof schema.users.$inferSelect>(tx, schema.users, userId);
+      if (!user) {
+        throw new AuthRepositoryError("internal_error", "User insert failed", 500);
+      }
+      const workspaceId = newRowId();
+      await tx.insert(schema.workspaces).values({ id: workspaceId, name: `${displayName} 的工作空间` });
+      const workspace = await fetchRowById<typeof schema.workspaces.$inferSelect>(tx, schema.workspaces, workspaceId);
+      if (!workspace) {
+        throw new AuthRepositoryError("internal_error", "Workspace insert failed", 500);
+      }
       await tx.insert(schema.workspaceMembers).values({
         workspaceId: workspace.id,
         userId: user.id,
         role: "owner",
       });
 
-      const [updated] = await tx
+      await tx
         .update(schema.activationCodes)
         .set({
           status: "used",
@@ -944,11 +976,10 @@ export class DrizzleAuthRepository implements AuthRepository {
           activatedAppVersion: input.appVersion,
           updatedAt: now,
         })
-        .where(eq(schema.activationCodes.id, code.id))
-        .returning();
+        .where(eq(schema.activationCodes.id, code.id));
 
       return {
-        activationId: updated.id,
+        activationId: code.id,
         installationId: input.installationId,
         activatedAt: now,
       };
@@ -962,17 +993,16 @@ export class DrizzleAuthRepository implements AuthRepository {
       for (let index = 0; index < input.count; index += 1) {
         const plaintext = generateActivationCodePlaintext();
         const codeHash = hashOpaqueValue(plaintext);
-        const [row] = await tx
-          .insert(schema.activationCodes)
-          .values({
-            codeHash,
-            status: "active",
-            label: input.label,
-            expiresAt: input.expiresAt,
-          })
-          .returning({ id: schema.activationCodes.id });
+        const codeId = newRowId();
+        await tx.insert(schema.activationCodes).values({
+          id: codeId,
+          codeHash,
+          status: "active",
+          label: input.label,
+          expiresAt: input.expiresAt,
+        });
 
-        codes.push({ id: row.id, code: plaintext });
+        codes.push({ id: codeId, code: plaintext });
       }
     });
 
@@ -984,7 +1014,7 @@ export class DrizzleAuthRepository implements AuthRepository {
     const whereClause = filters ? and(filters) : undefined;
 
     const [countRow] = await this.db
-      .select({ total: sql<number>`count(*)::int` })
+      .select({ total: countStar })
       .from(schema.activationCodes)
       .where(whereClause);
 
@@ -1034,15 +1064,12 @@ export class DrizzleAuthRepository implements AuthRepository {
   async listUsersForAdmin(input: ListUsersForAdminInput): Promise<ListUsersForAdminResult> {
     const whereClause = buildAdminUserWhere(input);
     const deviceCount = sql<number>`(
-      select count(*)::int
+      select cast(count(*) as signed)
       from ${schema.devices}
       where ${schema.devices.userId} = ${schema.users.id}
     )`;
 
-    const [countRow] = await this.db
-      .select({ total: sql<number>`count(*)::int` })
-      .from(schema.users)
-      .where(whereClause);
+    const [countRow] = await this.db.select({ total: countStar }).from(schema.users).where(whereClause);
 
     const rows = await this.db
       .select({
@@ -1113,11 +1140,10 @@ export class DrizzleAuthRepository implements AuthRepository {
     }
 
     const disabledAt = disabled ? new Date() : null;
-    const [updated] = await this.db
-      .update(schema.users)
-      .set({ disabledAt, updatedAt: new Date() })
-      .where(eq(schema.users.id, userId))
-      .returning();
+    const updated = await updateRowById<typeof schema.users.$inferSelect>(this.db, schema.users, userId, {
+      disabledAt,
+      updatedAt: new Date(),
+    });
 
     if (disabled) {
       await this.db
@@ -1180,8 +1206,8 @@ function buildRollupWhere(db: Db, input: Omit<GetTokenLeaderboardInput, "limit">
   return and(
     eq(schema.dailyUsageRollups.agentProvider, input.agentProvider),
     input.workspaceId ? eq(schema.dailyUsageRollups.workspaceId, input.workspaceId) : undefined,
-    input.fromDate ? gte(schema.dailyUsageRollups.usageDate, input.fromDate) : undefined,
-    input.toDate ? lte(schema.dailyUsageRollups.usageDate, input.toDate) : undefined,
+    input.fromDate ? gte(schema.dailyUsageRollups.usageDate, parseUsageDate(input.fromDate)) : undefined,
+    input.toDate ? lte(schema.dailyUsageRollups.usageDate, parseUsageDate(input.toDate)) : undefined,
     exists(
       db
         .select({ id: schema.devices.id })
@@ -1226,9 +1252,10 @@ async function findCodexThreadForUpdate(tx: Transaction, input: RecordCodexThrea
 }
 
 async function insertCodexThread(tx: Transaction, input: RecordCodexThreadUsageInput, now: Date) {
-  const [thread] = await tx
-    .insert(schema.codexThreads)
-    .values({
+  const threadId = newRowId();
+  try {
+    await tx.insert(schema.codexThreads).values({
+      id: threadId,
       workspaceId: input.workspaceId,
       userId: input.userId,
       deviceId: input.deviceId,
@@ -1238,17 +1265,24 @@ async function insertCodexThread(tx: Transaction, input: RecordCodexThreadUsageI
       tokensUsed: input.tokensUsed,
       threadUpdatedAtMs: input.threadUpdatedAtMs,
       lastUploadedAt: now,
-    })
-    .onConflictDoNothing({
-      target: [
-        schema.codexThreads.workspaceId,
-        schema.codexThreads.userId,
-        schema.codexThreads.deviceId,
-        schema.codexThreads.agentProvider,
-        schema.codexThreads.codexThreadId,
-      ],
-    })
-    .returning();
+    });
+  } catch {
+    // Duplicate composite key: another worker inserted the same thread.
+  }
+
+  const [thread] = await tx
+    .select()
+    .from(schema.codexThreads)
+    .where(
+      and(
+        eq(schema.codexThreads.workspaceId, input.workspaceId),
+        eq(schema.codexThreads.userId, input.userId),
+        eq(schema.codexThreads.deviceId, input.deviceId),
+        eq(schema.codexThreads.agentProvider, input.agentProvider),
+        eq(schema.codexThreads.codexThreadId, input.codexThreadId),
+      ),
+    )
+    .limit(1);
   return thread;
 }
 
@@ -1259,18 +1293,13 @@ async function updateCodexThread(
   acceptedTokensUsed: number,
   now: Date,
 ) {
-  const [thread] = await tx
-    .update(schema.codexThreads)
-    .set({
-      model: input.model,
-      tokensUsed: acceptedTokensUsed,
-      threadUpdatedAtMs: sql`greatest(${schema.codexThreads.threadUpdatedAtMs}, ${input.threadUpdatedAtMs})`,
-      lastUploadedAt: now,
-      updatedAt: now,
-    })
-    .where(eq(schema.codexThreads.id, threadId))
-    .returning();
-  return thread;
+  return updateRowById<typeof schema.codexThreads.$inferSelect>(tx, schema.codexThreads, threadId, {
+    model: input.model,
+    tokensUsed: acceptedTokensUsed,
+    threadUpdatedAtMs: sql`greatest(${schema.codexThreads.threadUpdatedAtMs}, ${input.threadUpdatedAtMs})`,
+    lastUploadedAt: now,
+    updatedAt: now,
+  });
 }
 
 async function upsertDailyRollup(
@@ -1291,13 +1320,7 @@ async function upsertDailyRollup(
       threadCount: threadCountDelta,
       updatedAt: now,
     })
-    .onConflictDoUpdate({
-      target: [
-        schema.dailyUsageRollups.workspaceId,
-        schema.dailyUsageRollups.userId,
-        schema.dailyUsageRollups.usageDate,
-        schema.dailyUsageRollups.agentProvider,
-      ],
+    .onDuplicateKeyUpdate({
       set: {
         tokensUsed: sql`${schema.dailyUsageRollups.tokensUsed} + ${deltaTokens}`,
         threadCount: sql`${schema.dailyUsageRollups.threadCount} + ${threadCountDelta}`,
@@ -1359,30 +1382,22 @@ function buildAdminUserWhere(input: ListUsersForAdminInput) {
     const pattern = `%${input.q}%`;
     filters.push(
       or(
-        ilike(schema.users.email, pattern),
-        ilike(schema.users.displayName, pattern),
-        ilike(schema.users.phoneNumber, pattern),
+        like(schema.users.email, pattern),
+        like(schema.users.displayName, pattern),
+        like(schema.users.phoneNumber, pattern),
       ),
     );
   }
 
   if (input.type === "phone") {
-    filters.push(
-      and(
-        ilike(schema.users.email, "phone-%@phone.agent-light.local"),
-      ),
-    );
+    filters.push(and(like(schema.users.email, "phone-%@phone.agent-light.local")));
   } else if (input.type === "activation") {
-    filters.push(
-      and(
-        ilike(schema.users.email, "activation-%@activation.agent-light.local"),
-      ),
-    );
+    filters.push(and(like(schema.users.email, "activation-%@activation.agent-light.local")));
   } else if (input.type === "email") {
     filters.push(
       and(
-        sql`${schema.users.email} not ilike 'phone-%@phone.agent-light.local'`,
-        sql`${schema.users.email} not ilike 'activation-%@activation.agent-light.local'`,
+        sql`${schema.users.email} not like 'phone-%@phone.agent-light.local'`,
+        sql`${schema.users.email} not like 'activation-%@activation.agent-light.local'`,
       ),
     );
   }
@@ -1409,8 +1424,14 @@ function mapHardwareDevice(hardwareDevice: typeof schema.hardwareDevices.$inferS
   };
 }
 
-function toUsageDate(value: number): string {
-  return new Date(value).toISOString().slice(0, 10);
+function toUsageDate(value: number): Date {
+  const date = new Date(value);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function parseUsageDate(value: string): Date {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function syntheticPhoneEmail(phoneNumber: string): string {

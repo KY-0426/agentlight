@@ -132,8 +132,8 @@ export default function App() {
   const [hardwareStatus, setHardwareStatus] = useState<HardwareStatusSnapshot | null>(null);
   const [cloudSession, setCloudSession] = useState<CloudSession | null>(null);
   const [cloudSyncStatus, setCloudSyncStatus] = useState<CloudSyncStatus>({
-    state: "syncing",
-    message: "正在连接云端…",
+    state: "signed_out",
+    message: "云端未连接，本地功能正常可用",
   });
   const [leaderboard, setLeaderboard] = useState<TokenLeaderboardResponse | null>(null);
   const [leaderboardAgentProvider, setLeaderboardAgentProvider] = useState<AgentProvider>("codex");
@@ -565,11 +565,19 @@ export default function App() {
     cloudSyncEnabledRef.current = true;
     updateConfig({ cloudSyncEnabled: true });
     setCloudSyncStatus({ state: "syncing", message: "正在开启云端同步…" });
-    const session = await connectCloudDevice(serverUrl);
-    setCloudSession(session);
-    cloudSessionRef.current = session;
-    setCloudSyncStatus({ state: "ready", message: cloudSessionMessage(session) });
-    await refreshTokenLeaderboard(session);
+    try {
+      const session = await connectCloudDevice(serverUrl);
+      setCloudSession(session);
+      cloudSessionRef.current = session;
+      setCloudSyncStatus({ state: "ready", message: cloudSessionMessage(session) });
+      await refreshTokenLeaderboard(session);
+    } catch (error) {
+      setCloudSyncStatus({
+        state: "error",
+        message: error instanceof Error ? error.message : "云端连接失败",
+      });
+      throw error;
+    }
   }
 
   async function signInCloud(request: CloudPhoneLoginRequest) {

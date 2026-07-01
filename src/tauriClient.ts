@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { USER_DISPLAY_NAME_MAX_LENGTH } from "@agent-light/shared";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -506,6 +507,36 @@ export async function getActivationStatus(): Promise<boolean> {
   return invoke<boolean>("get_activation_status");
 }
 
+export async function loadActivationRecord(): Promise<ClientActivationRecord | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return invoke<ClientActivationRecord | null>("get_activation_record");
+}
+
+export async function openActivationWindow(): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("请在 Win/Mac 桌面客户端中打开激活窗口");
+  }
+
+  await invoke("open_activation_window");
+}
+
+/** 激活码校验走线上服务；bootstrap 必须与激活时同一 server_url。 */
+export async function resolveActivationServerUrl(fallback?: string): Promise<string> {
+  const record = await loadActivationRecord();
+  const fromActivation = record?.server_url?.trim();
+  if (fromActivation) {
+    return normalizeCloudServerUrl(fromActivation);
+  }
+  const next = fallback?.trim();
+  if (next) {
+    return normalizeCloudServerUrl(next);
+  }
+  return resolveDefaultCloudServerUrl();
+}
+
 export async function activateClient(
   serverUrl: string,
   activationCode: string,
@@ -634,14 +665,15 @@ export async function probeCloudServerHealth(serverUrl: string): Promise<CloudSe
 }
 
 export async function connectCloudDevice(serverUrl: string): Promise<CloudSession> {
-  const health = await probeCloudServerHealth(serverUrl);
+  const bootstrapServerUrl = await resolveActivationServerUrl(serverUrl);
+  const health = await probeCloudServerHealth(bootstrapServerUrl);
   if (health === "invalid_url") {
     throw new Error("服务端地址格式不正确");
   }
   if (health === "unreachable") {
     throw new Error("无法连接云端，请检查网络后重试");
   }
-  return bootstrapCloudDevice(serverUrl);
+  return bootstrapCloudDevice(bootstrapServerUrl);
 }
 
 export async function bootstrapCloudDevice(
@@ -709,7 +741,8 @@ export async function ensureCloudSession(
   }
 
   try {
-    return await connectCloudDevice(serverUrl);
+    const bootstrapServerUrl = await resolveActivationServerUrl(serverUrl);
+    return await connectCloudDevice(bootstrapServerUrl);
   } catch {
     return existing;
   }
@@ -779,6 +812,9 @@ export async function updateCloudDisplayName(
   const trimmed = displayName.trim();
   if (!trimmed) {
     throw new Error("用户名不能为空");
+  }
+  if (trimmed.length > USER_DISPLAY_NAME_MAX_LENGTH) {
+    throw new Error(`用户名不能超过 ${USER_DISPLAY_NAME_MAX_LENGTH} 个字符`);
   }
 
   const response = await fetch(buildApiUrl(session.server_url, "/api/me"), {

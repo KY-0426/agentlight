@@ -1,19 +1,21 @@
 services:
-  postgres:
-    image: postgres:16-alpine
+  mysql:
+    image: mysql:5.7
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     environment:
-      POSTGRES_DB: agent_light
-      POSTGRES_USER: agent_light
-      POSTGRES_PASSWORD: agent_light
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: agent_light
+      MYSQL_USER: agent_light
+      MYSQL_PASSWORD: agent_light
     ports:
-      - "5432:5432"
+      - "3306:3306"
     volumes:
-      - agent_light_pgdata:/var/lib/postgresql/data
+      - agent_light_mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agent_light -d agent_light"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uagent_light", "-pagent_light"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
 
   server:
     profiles: ["prod"]
@@ -26,13 +28,13 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 8787
-      DATABASE_URL: postgresql://agent_light:agent_light@postgres:5432/agent_light
+      DATABASE_URL: mysql://agent_light:agent_light@mysql:3306/agent_light
     ports:
       - "8787:8787"
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  agent_light_pgdata:
+  agent_light_mysql_data:
