@@ -16,10 +16,10 @@ import {
   varchar,
 } from "drizzle-orm/mysql-core";
 
-export const workspaceRoleEnum = mysqlEnum("workspace_role", ["owner", "admin", "member"]);
-export const desktopPlatformEnum = mysqlEnum("desktop_platform", ["macos", "windows"]);
-export const inviteCodeStatusEnum = mysqlEnum("invite_code_status", ["active", "used", "revoked"]);
-export const agentProviderEnum = mysqlEnum("agent_provider", [
+export const workspaceRoleValues = ["owner", "admin", "member"] as const;
+export const desktopPlatformValues = ["macos", "windows"] as const;
+export const inviteCodeStatusValues = ["active", "used", "revoked"] as const;
+export const agentProviderValues = [
   "codex",
   "claude_code",
   "cursor",
@@ -32,7 +32,7 @@ export const agentProviderEnum = mysqlEnum("agent_provider", [
   "antigravity",
   "kiro",
   "devin",
-]);
+] as const;
 
 function rowId(name = "id") {
   return char(name, { length: 36 }).primaryKey().$defaultFn(() => randomUUID());
@@ -79,7 +79,7 @@ export const workspaceMembers = mysqlTable(
     userId: char("user_id", { length: 36 })
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
-    role: workspaceRoleEnum.notNull().default("member"),
+    role: mysqlEnum("role", workspaceRoleValues).notNull().default("member"),
     joinedAt: datetime("joined_at", { mode: "date", fsp: 3 })
       .notNull()
       .default(sql`CURRENT_TIMESTAMP(3)`),
@@ -101,7 +101,7 @@ export const devices = mysqlTable(
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     installationId: varchar("installation_id", { length: 128 }).notNull(),
-    platform: desktopPlatformEnum.notNull(),
+    platform: mysqlEnum("platform", desktopPlatformValues).notNull(),
     appVersion: varchar("app_version", { length: 40 }).notNull(),
     deviceLabel: varchar("device_label", { length: 120 }),
     lastSeenAt: datetime("last_seen_at", { mode: "date", fsp: 3 }),
@@ -152,7 +152,7 @@ export const codexThreads = mysqlTable(
     deviceId: char("device_id", { length: 36 })
       .references(() => devices.id, { onDelete: "cascade" })
       .notNull(),
-    agentProvider: agentProviderEnum.notNull().default("codex"),
+    agentProvider: mysqlEnum("agent_provider", agentProviderValues).notNull().default("codex"),
     codexThreadId: varchar("codex_thread_id", { length: 128 }).notNull(),
     model: varchar("model", { length: 80 }),
     tokensUsed: bigint("tokens_used", { mode: "number" }).default(0).notNull(),
@@ -188,7 +188,7 @@ export const usageEvents = mysqlTable(
     deviceId: char("device_id", { length: 36 })
       .references(() => devices.id, { onDelete: "cascade" })
       .notNull(),
-    agentProvider: agentProviderEnum.notNull().default("codex"),
+    agentProvider: mysqlEnum("agent_provider", agentProviderValues).notNull().default("codex"),
     codexThreadId: char("codex_thread_id", { length: 36 })
       .references(() => codexThreads.id, { onDelete: "cascade" })
       .notNull(),
@@ -215,7 +215,7 @@ export const dailyUsageRollups = mysqlTable(
     userId: char("user_id", { length: 36 })
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
-    agentProvider: agentProviderEnum.notNull().default("codex"),
+    agentProvider: mysqlEnum("agent_provider", agentProviderValues).notNull().default("codex"),
     usageDate: date("usage_date").notNull(),
     tokensUsed: bigint("tokens_used", { mode: "number" }).default(0).notNull(),
     threadCount: int("thread_count").default(0).notNull(),
@@ -257,13 +257,13 @@ export const activationCodes = mysqlTable(
   {
     id: rowId(),
     codeHash: varchar("code_hash", { length: 64 }).notNull(),
-    status: inviteCodeStatusEnum.notNull().default("active"),
+    status: mysqlEnum("status", inviteCodeStatusValues).notNull().default("active"),
     label: varchar("label", { length: 200 }),
     expiresAt: datetime("expires_at", { mode: "date", fsp: 3 }),
     usedAt: datetime("used_at", { mode: "date", fsp: 3 }),
     userId: char("user_id", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
     activatedInstallationId: varchar("activated_installation_id", { length: 128 }),
-    activatedPlatform: desktopPlatformEnum,
+    activatedPlatform: mysqlEnum("activated_platform", desktopPlatformValues),
     activatedAppVersion: varchar("activated_app_version", { length: 40 }),
     ...timestamps,
   },
@@ -280,7 +280,7 @@ export const inviteCodes = mysqlTable(
   {
     id: rowId(),
     codeHash: varchar("code_hash", { length: 64 }).notNull(),
-    status: inviteCodeStatusEnum.notNull().default("active"),
+    status: mysqlEnum("status", inviteCodeStatusValues).notNull().default("active"),
     workspaceId: char("workspace_id", { length: 36 }).references(() => workspaces.id, { onDelete: "set null" }),
     createdByUserId: char("created_by_user_id", { length: 36 }).references(() => users.id, { onDelete: "set null" }),
     usedByUserId: char("used_by_user_id", { length: 36 }).references(() => users.id, { onDelete: "set null" }),

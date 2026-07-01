@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { formatTokenCount, USER_DISPLAY_NAME_MAX_LENGTH } from "@agent-light/shared";
 import { useGuardedClick } from "../hooks/useGuardedClick";
 import type { AgentState, AgentStatusEvent } from "../domain/status";
@@ -7,9 +7,6 @@ import type { AiToolTokenUsage } from "../domain/aiTools";
 import { AiToolConnectModal } from "./AiToolConnectModal";
 import { AiToolTokenOverview } from "./AiToolTokenOverview";
 import type {
-  CloudPhoneLoginRequest,
-  CloudPhoneCodeRequest,
-  CloudPhoneCodeResponse,
   CloudSession,
   HardwareStatusSnapshot,
   SettingsPageTarget,
@@ -50,7 +47,7 @@ const DISPLAY_NAV: { page: SettingsPage; label: string; hint: string }[] = [
 ];
 
 const SETTINGS_NAV: { page: SettingsPage; label: string; hint: string }[] = [
-  { page: "account", label: "账号", hint: "同步与绑定" },
+  { page: "account", label: "账号", hint: "云端同步" },
   { page: "preferences", label: "偏好", hint: "窗口与启动" },
   { page: "effect", label: "灯效", hint: "颜色与亮度" },
   { page: "hardware", label: "硬件", hint: "灯盒连接" },
@@ -112,9 +109,7 @@ interface PetSettingsPanelProps {
   onAlwaysOnTopChange: (enabled: boolean) => void;
   onLaunchAtLoginChange: (enabled: boolean) => void;
   onLightSettingsChange: (settings: LightSettings) => void;
-  onCloudLogin: (request: CloudPhoneLoginRequest) => Promise<void>;
   onCloudConnect: (serverUrl: string) => Promise<void>;
-  onCloudSendPhoneCode: (request: CloudPhoneCodeRequest) => Promise<CloudPhoneCodeResponse>;
   onCloudRenameDisplayName: (displayName: string) => Promise<void>;
   onCloudLogout: () => Promise<void>;
   onRefreshLeaderboard: () => Promise<void>;
@@ -145,9 +140,7 @@ export function PetSettingsPanel({
   onAlwaysOnTopChange,
   onLaunchAtLoginChange,
   onLightSettingsChange,
-  onCloudLogin,
   onCloudConnect,
-  onCloudSendPhoneCode,
   onCloudRenameDisplayName,
   onCloudLogout,
   onRefreshLeaderboard,
@@ -308,9 +301,7 @@ export function PetSettingsPanel({
                 cloudSession={cloudSession}
                 cloudSyncStatus={cloudSyncStatus}
                 onConnectCloud={onCloudConnect}
-                onBindPhone={onCloudLogin}
                 onLogout={onCloudLogout}
-                onSendPhoneCode={onCloudSendPhoneCode}
                 onRenameDisplayName={onCloudRenameDisplayName}
               />
             ) : activePage === "leaderboard" ? (
@@ -518,9 +509,7 @@ interface AccountPanelProps {
   cloudSession: CloudSession | null;
   cloudSyncStatus: CloudSyncStatus;
   onConnectCloud: (serverUrl: string) => Promise<void>;
-  onBindPhone: (request: CloudPhoneLoginRequest) => Promise<void>;
   onLogout: () => Promise<void>;
-  onSendPhoneCode: (request: CloudPhoneCodeRequest) => Promise<CloudPhoneCodeResponse>;
   onRenameDisplayName: (displayName: string) => Promise<void>;
 }
 
@@ -528,9 +517,7 @@ function AccountPanel({
   cloudSession,
   cloudSyncStatus,
   onConnectCloud,
-  onBindPhone,
   onLogout,
-  onSendPhoneCode,
   onRenameDisplayName,
 }: AccountPanelProps) {
   const logoutClick = useGuardedClick(onLogout);
@@ -664,14 +651,6 @@ function AccountPanel({
           </div>
         </div>
       </section>
-
-      {deviceAccount ? (
-        <PhoneBindPanel
-          serverUrl={cloudSession.server_url}
-          onBindPhone={onBindPhone}
-          onSendPhoneCode={onSendPhoneCode}
-        />
-      ) : null}
     </div>
   );
 }
@@ -808,124 +787,6 @@ function CloudConnectPanel({
         </div>
       </section>
     </div>
-  );
-}
-
-function PhoneBindPanel({
-  serverUrl,
-  onBindPhone,
-  onSendPhoneCode,
-}: {
-  serverUrl: string;
-  onBindPhone: (request: CloudPhoneLoginRequest) => Promise<void>;
-  onSendPhoneCode: (request: CloudPhoneCodeRequest) => Promise<CloudPhoneCodeResponse>;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [phoneNumber, setPhoneNumber] = useState("");
-  const [verificationCode, setVerificationCode] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [bindStatus, setBindStatus] = useState<"idle" | "submitting" | "error">("idle");
-  const [codeStatus, setCodeStatus] = useState<"idle" | "submitting" | "sent" | "error">("idle");
-  const [bindError, setBindError] = useState<string | null>(null);
-  const [codeMessage, setCodeMessage] = useState<string | null>(null);
-
-  const sendCodeClick = useGuardedClick(async () => {
-    setCodeStatus("submitting");
-    setBindError(null);
-    setCodeMessage(null);
-    try {
-      const response = await onSendPhoneCode({ serverUrl, phoneNumber });
-      setCodeStatus("sent");
-      setCodeMessage(
-        response.dev_code
-          ? `验证码 ${response.dev_code}，${Math.floor(response.expires_in_seconds / 60)} 分钟内有效`
-          : "验证码已发送",
-      );
-    } catch (error) {
-      setCodeStatus("error");
-      setCodeMessage(error instanceof Error ? error.message : "验证码发送失败");
-    }
-  });
-
-  async function submitBind(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setBindStatus("submitting");
-    setBindError(null);
-    try {
-      await onBindPhone({ serverUrl, phoneNumber, verificationCode, displayName });
-      setVerificationCode("");
-      setBindStatus("idle");
-    } catch (error) {
-      setBindStatus("error");
-      setBindError(error instanceof Error ? error.message : "手机号绑定失败");
-    }
-  }
-
-  return (
-    <section className="settings-section phone-bind-panel" aria-labelledby="phone-bind-heading">
-      <div className="settings-section__title">
-        <h2 id="phone-bind-heading">绑定手机号</h2>
-        <span className="settings-badge">可选</span>
-      </div>
-      <p className="leaderboard-note">绑定手机号后，可在多台设备间合并账户与用量数据。</p>
-      <button
-        className="leaderboard-refresh leaderboard-refresh--secondary"
-        type="button"
-        onClick={() => setExpanded((current) => !current)}
-      >
-        {expanded ? "收起" : "展开绑定表单"}
-      </button>
-      {expanded ? (
-        <form className="leaderboard-form" onSubmit={(event) => void submitBind(event)}>
-          <label className="leaderboard-field">
-            <span>手机号</span>
-            <input
-              type="tel"
-              value={phoneNumber}
-              onChange={(event) => setPhoneNumber(event.target.value)}
-              autoComplete="tel"
-              required
-            />
-          </label>
-          <label className="leaderboard-field">
-            <span>验证码</span>
-            <input
-              type="text"
-              value={verificationCode}
-              onChange={(event) => setVerificationCode(event.target.value)}
-              autoComplete="one-time-code"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              required
-            />
-          </label>
-          <button
-            className="leaderboard-refresh leaderboard-refresh--secondary"
-            type="button"
-            disabled={codeStatus === "submitting" || sendCodeClick.busy || !phoneNumber.trim()}
-            onClick={() => sendCodeClick.onClick()}
-          >
-            {codeStatus === "submitting" || sendCodeClick.busy ? "发送中" : "获取验证码"}
-          </button>
-          <label className="leaderboard-field">
-            <span>昵称</span>
-            <input
-              type="text"
-              value={displayName}
-              onChange={(event) => setDisplayName(event.target.value)}
-              autoComplete="name"
-              placeholder="可选"
-              maxLength={USER_DISPLAY_NAME_MAX_LENGTH}
-            />
-          </label>
-          <button className="leaderboard-refresh" type="submit" disabled={bindStatus === "submitting"}>
-            {bindStatus === "submitting" ? "绑定中" : "绑定手机号"}
-          </button>
-          {codeMessage ? <p className={codeStatus === "error" ? "leaderboard-error" : "leaderboard-note"}>{codeMessage}</p> : null}
-          {bindStatus === "error" ? <p className="leaderboard-error">{bindError}</p> : null}
-        </form>
-      ) : null}
-    </section>
   );
 }
 

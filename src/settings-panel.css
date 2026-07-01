@@ -1318,15 +1318,6 @@
   font-size: 12px;
 }
 
-.phone-bind-panel {
-  margin-top: 2px;
-}
-
-.phone-bind-panel .leaderboard-form {
-  margin-top: 14px;
-  gap: 12px;
-}
-
 .leaderboard-session {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr)) auto;

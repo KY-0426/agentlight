@@ -32,12 +32,10 @@ import {
   loadCloudSession,
   ensureCloudSession,
   connectCloudDevice,
-  loginOrRegisterCloud,
   hideSettingsWindow,
   exitApp,
   openSettingsWindow,
   clearCloudSession,
-  sendPhoneVerificationCodeCloud,
   updateCloudDisplayName,
   syncCloudProfileFromServer,
   ensureCloudAccessToken,
@@ -47,9 +45,6 @@ import {
   snapMainWindowToTop,
   startWindowDrag,
   uploadCodexThreadUsage,
-  type CloudPhoneLoginRequest,
-  type CloudPhoneCodeRequest,
-  type CloudPhoneCodeResponse,
   type CloudSession,
   type CodexStatusSnapshot,
   type HardwareStatusSnapshot,
@@ -580,27 +575,6 @@ export default function App() {
     }
   }
 
-  async function signInCloud(request: CloudPhoneLoginRequest) {
-    cloudSyncEnabledRef.current = true;
-    updateConfig({ cloudSyncEnabled: true });
-    setCloudSyncStatus({ state: "syncing", message: "正在登录并绑定本机设备" });
-    const session = await loginOrRegisterCloud(request);
-    setCloudSession(session);
-    cloudSessionRef.current = session;
-    setCloudSyncStatus({ state: "ready", message: cloudSessionMessage(session) });
-    await refreshTokenLeaderboard(session);
-    if (codexStatus) {
-      void syncAgentUsage(codexStatus, "codex", session);
-    }
-    if (cursorStatus) {
-      void syncAgentUsage(cursorStatus, "cursor", session);
-    }
-  }
-
-  async function sendCloudPhoneCode(request: CloudPhoneCodeRequest): Promise<CloudPhoneCodeResponse> {
-    return sendPhoneVerificationCodeCloud(request);
-  }
-
   async function renameCloudDisplayName(displayName: string) {
     const session = cloudSessionRef.current;
     if (!session) {
@@ -703,9 +677,7 @@ export default function App() {
         }}
         onLaunchAtLoginChange={(enabled) => updateConfig({ launchAtLogin: enabled })}
         onLightSettingsChange={(lightSettings) => updateConfig({ lightSettings })}
-        onCloudLogin={signInCloud}
         onCloudConnect={connectCloud}
-        onCloudSendPhoneCode={sendCloudPhoneCode}
         onCloudRenameDisplayName={renameCloudDisplayName}
         onCloudLogout={signOutCloud}
         onRefreshLeaderboard={() => refreshTokenLeaderboard()}

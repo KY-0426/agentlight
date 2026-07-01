@@ -1,7 +1,7 @@
 # Agent Light — 云托管 API 容器（外置 MySQL，数据持久化）
 # 构建上下文：仓库根目录
 # 云托管：Dockerfile 名称 Dockerfile，端口 8787
-# 默认连接与密钥写在本文件 ENV；云托管环境变量可覆盖同名项
+# 必填环境变量：DATABASE_URL=mysql://user:pass@10.15.108.198:3306/agent_light
 
 FROM node:20-alpine AS deps
 WORKDIR /app
@@ -18,11 +18,7 @@ RUN apk add --no-cache wget
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=8787 \
-    LOG_LEVEL=info \
-    DATABASE_URL=mysql://root:J6psd2ts@sh-cynosdbmysql-grp-ohimgd96.sql.tencentcdb.com:21534/agent_light \
-    ACCESS_TOKEN_SECRET=d66a6245bec826d0014e2315fd40aeb7b93638cbbbe204a833e44044cd5cc28e \
-    REFRESH_TOKEN_SECRET=271c7aceaff0047b88e14d5a4ad827eac09db27f1055a47a5ce81a8b620ac715 \
-    ACTIVATION_SIGNING_SECRET=dd378a41cf8b76037a7556f0bb738d73c30a154b96422a6e34721fae4cc71cb4
+    LOG_LEVEL=info
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
