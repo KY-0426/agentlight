@@ -807,6 +807,10 @@ export class DrizzleAuthRepository implements AuthRepository {
       }
 
       const now = new Date();
+      await updateRowById<typeof schema.devices.$inferSelect>(tx, schema.devices, input.deviceId, {
+        lastSeenAt: now,
+        updatedAt: now,
+      });
       let existingThread = await findCodexThreadForUpdate(tx, input);
       let insertedNewThread = false;
       let thread = existingThread;

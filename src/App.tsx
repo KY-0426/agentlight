@@ -18,6 +18,7 @@ import {
   normalizeLightSettings,
   statusDefinitions,
 } from "./domain/status";
+import { formatUserFacingError } from "./domain/userFacingErrors";
 import {
   getCodexStatus,
   getCursorStatus,
@@ -36,6 +37,7 @@ import {
   listenForHardwareStatus,
   loadCloudSession,
   ensureCloudSession,
+  bootstrapCloudDevice,
   connectCloudDevice,
   hideSettingsWindow,
   exitApp,
@@ -394,8 +396,7 @@ export default function App() {
       hardwareTimer = window.setInterval(() => {
         void refreshHardwareStatus();
       }, HARDWARE_REFRESH_MS);
-      void refreshCloudSession();
-      void refreshTokenLeaderboard();
+      void refreshSettingsLeaderboardData();
       cloudSessionTimer = window.setInterval(() => {
         void refreshCloudSession();
       }, CLOUD_SESSION_REFRESH_MS);
@@ -655,6 +656,21 @@ export default function App() {
     }
   }, [debouncedPreviewLightSettings, flushLightSettingsPersist]);
 
+  async function refreshSettingsLeaderboardData() {
+    await refreshCloudSession();
+    const session = cloudSessionRef.current;
+    if (session && cloudSyncEnabledRef.current && isTauriRuntime()) {
+      try {
+        const updated = await bootstrapCloudDevice(session.server_url);
+        setCloudSession(updated);
+        cloudSessionRef.current = updated;
+      } catch {
+        // Keep the restored session; leaderboard may stay empty until presence is refreshed.
+      }
+    }
+    await refreshTokenLeaderboard();
+  }
+
   async function refreshCloudSession() {
     try {
       let session = await loadCloudSession();
@@ -714,7 +730,7 @@ export default function App() {
       setLeaderboardStatus("ready");
     } catch (error) {
       setLeaderboardStatus("error");
-      setLeaderboardError(error instanceof Error ? error.message : "排行榜读取失败");
+      setLeaderboardError(formatUserFacingError(error, "排行榜读取失败"));
     }
   }
 
@@ -743,7 +759,7 @@ export default function App() {
     } catch (error) {
       setCloudSyncStatus({
         state: "error",
-        message: error instanceof Error ? error.message : "云端连接失败",
+        message: formatUserFacingError(error, "云端连接失败，请稍后重试"),
       });
       throw error;
     }

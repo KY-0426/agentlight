@@ -457,6 +457,8 @@ export class InMemoryAuthRepository implements AuthRepository {
       throw new AuthRepositoryError("forbidden", "Device access denied", 403);
     }
 
+    this.devices.set(input.deviceId, { ...device, lastSeenAt: new Date() });
+
     const key = codexThreadKey(input);
     const existing = this.codexThreads.get(key);
     const ignoredStaleValue = Boolean(existing && input.tokensUsed < existing.tokensUsed);

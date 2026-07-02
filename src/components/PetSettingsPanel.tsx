@@ -17,6 +17,7 @@ import type {
 import { agentStates, lightStateCssVars, lightStateDisplayColor, lightModeLabels, lightModeHints, lightModes, statusDefinitions } from "../domain/status";
 import { pickActiveAiToolLabel, pickActiveAiToolName } from "../domain/agentMonitor";
 import { aiToolAccent, isAiToolId } from "../domain/aiTools";
+import { formatUserFacingError } from "../domain/userFacingErrors";
 import {
   agentProviderLabels,
   agentProviderOrder,
@@ -591,7 +592,7 @@ function AccountPanel({
       await onRenameDisplayName(nextName);
       setEditingName(false);
     } catch (error) {
-      setNameError(error instanceof Error ? error.message : "用户名更新失败");
+      setNameError(formatUserFacingError(error, "用户名更新失败"));
     } finally {
       setSavingName(false);
     }
@@ -655,11 +656,13 @@ function AccountPanel({
               <small>{formatSyncDetail(cloudSession, cloudSyncStatus)}</small>
             </article>
           </div>
-          <article className="account-card account-card--server">
-            <span>服务端</span>
-            <strong className="account-card__url">{formatServerUrl(cloudSession.server_url)}</strong>
-            <small>更换地址请先断开云端同步，再重新连接</small>
-          </article>
+          {IS_DEV_BUILD ? (
+            <article className="account-card account-card--server">
+              <span>服务端</span>
+              <strong className="account-card__url">{formatServerUrl(cloudSession.server_url)}</strong>
+              <small>仅开发模式可见 · 更换地址请先断开云端同步，再重新连接</small>
+            </article>
+          ) : null}
           {IS_DEV_BUILD ? (
             <article className="account-card">
               <span>工作空间</span>
@@ -727,7 +730,7 @@ function CloudConnectPanel({
       if (!record?.receipt) {
         setConnectStatus("error");
         setConnectError(
-          activated
+          IS_DEV_BUILD && activated
             ? "开发模式已跳过本地激活检查，云端同步仍需输入激活码完成联网校验"
             : "请先完成激活，再开启云端同步",
         );
@@ -1440,7 +1443,6 @@ function formatCloudConnectError(error: unknown, hasActivationRecord: boolean): 
       }
       return "请先完成激活，再开启云端同步";
     }
-    return message || "云端连接失败，请稍后重试";
   }
-  return "云端连接失败，请稍后重试";
+  return formatUserFacingError(error, "云端连接失败，请稍后重试");
 }

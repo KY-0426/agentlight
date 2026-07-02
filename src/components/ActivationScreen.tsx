@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from "react";
+import { formatUserFacingError } from "../domain/userFacingErrors";
 import { resolveDefaultCloudServerUrl } from "../domain/leaderboard";
 import { activateClient, bootstrapCloudDevice, isTauriRuntime, syncAiToolConnectors } from "../tauriClient";
 
@@ -80,24 +81,5 @@ export function ActivationScreen({ onActivated }: ActivationScreenProps) {
 }
 
 function formatActivationError(error: unknown): string {
-  if (error instanceof Error) {
-    const message = error.message.trim();
-    if (message.includes("activation_code_invalid") || message.includes("Activation code is invalid")) {
-      return "激活码无效或已过期";
-    }
-    if (message.includes("activation_code_used") || message.includes("already been used")) {
-      return "激活码已被使用";
-    }
-    if (message.includes("activation_code_revoked") || message.includes("revoked")) {
-      return "激活码已被作废";
-    }
-    if (message.includes("activation_code_expired") || message.includes("expired")) {
-      return "激活码已过期";
-    }
-    if (message.includes("Could not reach") || message.includes("activation_request_failed")) {
-      return "无法连接激活服务器，请检查网络后重试";
-    }
-    return message || "激活失败，请稍后重试";
-  }
-  return "激活失败，请稍后重试";
+  return formatUserFacingError(error, "激活失败，请稍后重试");
 }
