@@ -1,6 +1,6 @@
 [package]
 name = "agent-light"
-version = "0.1.5"
+version = "0.1.6"
 description = "AI agent status light desktop MVP"
 authors = ["Agent Light"]
 edition = "2021"
