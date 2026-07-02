@@ -42,6 +42,8 @@ export {
   agentProviderOrder,
   leaderboardTimePeriodLabels,
   leaderboardTimePeriodOrder,
+  resolveLeaderboardEmptyHint,
+  resolveLeaderboardSelfRankHint,
   type AgentProvider,
   type LeaderboardTimePeriod,
   type TokenLeaderboardEntry,
@@ -249,12 +251,19 @@ interface HardwareLightStateSettings {
   green: number;
   blue: number;
   brightness: number;
+  mode?: string | null;
 }
 
 type HardwareLightSettingsRequest = Record<AgentState, HardwareLightStateSettings>;
 
+export interface SetHardwareLightSettingsOptions {
+  persist?: boolean;
+  applyAgentState?: boolean;
+}
+
 export async function setHardwareLightSettings(
   settings: LightSettings,
+  options: SetHardwareLightSettingsOptions = {},
 ): Promise<HardwareStatusSnapshot | null> {
   if (!isTauriRuntime()) {
     return null;
@@ -265,11 +274,46 @@ export async function setHardwareLightSettings(
     payload[state] = {
       ...rgb,
       brightness: settings[state].brightness,
+      mode: settings[state].mode,
     };
     return payload;
   }, {} as HardwareLightSettingsRequest);
 
-  return invoke<HardwareStatusSnapshot>("set_light_settings", { request });
+  return invoke<HardwareStatusSnapshot>("set_light_settings", {
+    request,
+    options: {
+      persist: options.persist ?? true,
+      apply_agent_state: options.applyAgentState ?? true,
+    },
+  });
+}
+
+export type HardwareLightSettings = Record<AgentState, HardwareLightStateSettings>;
+
+export async function getHardwareLightSettings(): Promise<HardwareLightSettings | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return invoke<HardwareLightSettings>("get_light_settings");
+}
+
+export async function previewHardwareLight(
+  state: AgentState,
+): Promise<HardwareStatusSnapshot | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return invoke<HardwareStatusSnapshot>("preview_hardware_light", { state });
+}
+
+export async function restoreHardwareLight(): Promise<HardwareStatusSnapshot | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return invoke<HardwareStatusSnapshot>("restore_hardware_light");
 }
 
 export interface CloudSession {

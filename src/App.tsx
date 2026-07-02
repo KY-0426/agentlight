@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AgentPet } from "./components/AgentPet";
 import { HardwareDebugPanel } from "./components/HardwareDebugPanel";
 import { PetSettingsPanel } from "./components/PetSettingsPanel";
 import { useGuardedClick } from "./hooks/useGuardedClick";
+import { debounce } from "./utils/debounce";
 import { getAppView, getShellView } from "./appView";
 import type { AiToolTokenUsage } from "./domain/aiTools";
 import {
@@ -11,6 +12,9 @@ import {
   type LightSettings,
   createStatusEvent,
   defaultLightSettings,
+  hardwareLightSettingsToLightSettings,
+  lightSettingsEqual,
+  lightStateCssVars,
   normalizeLightSettings,
   statusDefinitions,
 } from "./domain/status";
@@ -20,6 +24,7 @@ import {
   listAiToolTokenUsages,
   syncAiToolConnectors,
   getHardwareStatus,
+  getHardwareLightSettings,
   probeHardware,
   getTokenLeaderboard,
   getSystemMetrics,
@@ -43,6 +48,8 @@ import {
   setAgentState,
   setAlwaysOnTop,
   setHardwareLightSettings,
+  previewHardwareLight,
+  restoreHardwareLight,
   snapMainWindowToTop,
   startWindowDrag,
   type CloudSession,
@@ -63,6 +70,9 @@ const SYSTEM_METRICS_REFRESH_MS = 30_000;
 const MAIN_PLACEMENT_REFRESH_MS = 10_000;
 const HARDWARE_REFRESH_MS = 30_000;
 const AI_TOOL_SYNC_INTERVAL_MS = 5 * 60_000;
+const LIGHT_SETTINGS_PERSIST_DEBOUNCE_MS = 500;
+const LIGHT_SETTINGS_PREVIEW_DEBOUNCE_MS = 150;
+const CONFIG_STORAGE_DEBOUNCE_MS = 300;
 
 interface StoredConfig {
   alwaysOnTop: boolean;
@@ -146,6 +156,118 @@ export default function App() {
   const leaderboardAgentProviderRef = useRef<AgentProvider>("codex");
   const leaderboardTimePeriodRef = useRef<LeaderboardTimePeriod>("total");
   const windowLabelRef = useRef<string | null>(null);
+  const [lightSettingsReady, setLightSettingsReady] = useState(() => !isTauriRuntime());
+  const configRef = useRef(config);
+  configRef.current = config;
+  const lightPreviewGenerationRef = useRef(0);
+
+  const persistLightSettings = useCallback(async (settings: LightSettings) => {
+    try {
+      await setHardwareLightSettings(settings, {
+        persist: true,
+        applyAgentState: false,
+      });
+    } catch {
+      // ignore persistence errors during interactive editing
+    }
+  }, []);
+
+  const debouncedPersistLightSettings = useMemo(
+    () => debounce(persistLightSettings, LIGHT_SETTINGS_PERSIST_DEBOUNCE_MS),
+    [persistLightSettings],
+  );
+
+  const previewLightSettingsOnHardware = useCallback(async (state: AgentState, settings: LightSettings) => {
+    const generation = ++lightPreviewGenerationRef.current;
+    try {
+      await setHardwareLightSettings(settings, {
+        persist: false,
+        applyAgentState: false,
+      });
+      if (generation !== lightPreviewGenerationRef.current) {
+        return;
+      }
+      const snapshot = await previewHardwareLight(state);
+      if (generation !== lightPreviewGenerationRef.current) {
+        return;
+      }
+      if (snapshot) {
+        setHardwareStatus(snapshot);
+      }
+    } catch {
+      if (generation === lightPreviewGenerationRef.current) {
+        window.setTimeout(() => void refreshHardwareStatus(), 160);
+      }
+    }
+  }, []);
+
+  const debouncedPreviewLightSettings = useMemo(
+    () => debounce(previewLightSettingsOnHardware, LIGHT_SETTINGS_PREVIEW_DEBOUNCE_MS),
+    [previewLightSettingsOnHardware],
+  );
+
+  const flushLightSettingsPersist = useCallback(async () => {
+    debouncedPersistLightSettings.cancel();
+    await persistLightSettings(configRef.current.lightSettings);
+  }, [debouncedPersistLightSettings, persistLightSettings]);
+
+  const debouncedSaveConfig = useMemo(
+    () =>
+      debounce((nextConfig: StoredConfig) => {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextConfig));
+      }, CONFIG_STORAGE_DEBOUNCE_MS),
+    [],
+  );
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      const stored = loadConfig();
+
+      try {
+        const remote = await getHardwareLightSettings();
+        if (cancelled) {
+          return;
+        }
+
+        if (remote) {
+          const rustSettings = hardwareLightSettingsToLightSettings(remote);
+          const hasRustCustom = !lightSettingsEqual(rustSettings, defaultLightSettings);
+          const hasLocalCustom = !lightSettingsEqual(stored.lightSettings, defaultLightSettings);
+
+          if (hasRustCustom) {
+            setConfig((current) =>
+              lightSettingsEqual(current.lightSettings, rustSettings)
+                ? current
+                : { ...current, lightSettings: rustSettings },
+            );
+            return;
+          }
+
+          if (hasLocalCustom) {
+            await setHardwareLightSettings(stored.lightSettings);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          await setHardwareLightSettings(stored.lightSettings);
+        }
+      } finally {
+        if (!cancelled) {
+          setLightSettingsReady(true);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -162,8 +284,11 @@ export default function App() {
   }, [config.alwaysOnTop]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-  }, [config]);
+    debouncedSaveConfig(config);
+    return () => {
+      debouncedSaveConfig.cancel();
+    };
+  }, [config, debouncedSaveConfig]);
 
   useEffect(() => {
     cloudSyncEnabledRef.current = config.cloudSyncEnabled;
@@ -182,8 +307,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void syncHardwareLightSettings(config.lightSettings);
-  }, [config.lightSettings]);
+    if (!lightSettingsReady) {
+      return;
+    }
+    debouncedPersistLightSettings(config.lightSettings);
+  }, [config.lightSettings, debouncedPersistLightSettings, lightSettingsReady]);
 
   useEffect(() => {
     cloudSessionRef.current = cloudSession;
@@ -476,7 +604,10 @@ export default function App() {
 
   async function syncHardwareLightSettings(lightSettings: LightSettings) {
     try {
-      const snapshot = await setHardwareLightSettings(lightSettings);
+      const snapshot = await setHardwareLightSettings(lightSettings, {
+        persist: true,
+        applyAgentState: true,
+      });
       if (snapshot) {
         setHardwareStatus(snapshot);
         window.setTimeout(() => void refreshHardwareStatus(), 160);
@@ -485,6 +616,27 @@ export default function App() {
       window.setTimeout(() => void refreshHardwareStatus(), 160);
     }
   }
+
+  const previewHardwareForState = useCallback(
+    (state: AgentState, settings?: LightSettings) => {
+      debouncedPreviewLightSettings(state, settings ?? configRef.current.lightSettings);
+    },
+    [debouncedPreviewLightSettings],
+  );
+
+  const restoreHardwareToAgentState = useCallback(async () => {
+    debouncedPreviewLightSettings.cancel();
+    lightPreviewGenerationRef.current += 1;
+    await flushLightSettingsPersist();
+    try {
+      const snapshot = await restoreHardwareLight();
+      if (snapshot) {
+        setHardwareStatus(snapshot);
+      }
+    } catch {
+      window.setTimeout(() => void refreshHardwareStatus(), 160);
+    }
+  }, [debouncedPreviewLightSettings, flushLightSettingsPersist]);
 
   async function refreshCloudSession() {
     try {
@@ -642,7 +794,8 @@ export default function App() {
         onLeaderboardAgentChange={selectLeaderboardAgentProvider}
         onLeaderboardTimePeriodChange={selectLeaderboardTimePeriod}
         onProbeHardware={() => refreshHardwareStatus({ probe: true })}
-        onTrigger={(state) => void triggerState(state)}
+        onPreviewHardwareLight={previewHardwareForState}
+        onRestoreHardwareLight={restoreHardwareToAgentState}
         onExitApp={() => void quitApp()}
       />
     );
@@ -662,6 +815,7 @@ export default function App() {
   return (
     <main
       className={`desktop-shell desktop-shell--${event.state}`}
+      style={lightStateCssVars(event.state, config.lightSettings) as CSSProperties}
       onDoubleClick={() => void dragMainWindow()}
     >
       <section className="pet-strip" aria-label="桌面桌宠移动区">

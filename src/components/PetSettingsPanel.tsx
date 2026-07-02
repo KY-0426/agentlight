@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { formatTokenCount, USER_DISPLAY_NAME_MAX_LENGTH } from "@agent-light/shared";
 import { useGuardedClick } from "../hooks/useGuardedClick";
 import type { AgentState, AgentStatusEvent } from "../domain/status";
@@ -14,7 +14,7 @@ import type {
   TokenLeaderboardResponse,
   LeaderboardTimePeriod,
 } from "../tauriClient";
-import { agentStates, defaultPalette, statusDefinitions } from "../domain/status";
+import { agentStates, lightStateCssVars, lightStateDisplayColor, lightModeLabels, lightModeHints, lightModes, statusDefinitions } from "../domain/status";
 import { pickActiveAiToolLabel, pickActiveAiToolName } from "../domain/agentMonitor";
 import { aiToolAccent, isAiToolId } from "../domain/aiTools";
 import {
@@ -28,6 +28,8 @@ import {
   isDeviceCloudAccount,
   leaderboardTimePeriodLabels,
   leaderboardTimePeriodOrder,
+  resolveLeaderboardEmptyHint,
+  resolveLeaderboardSelfRankHint,
   listenForSettingsPage,
 } from "../tauriClient";
 
@@ -49,7 +51,7 @@ const DISPLAY_NAV: { page: SettingsPage; label: string; hint: string }[] = [
 const SETTINGS_NAV: { page: SettingsPage; label: string; hint: string }[] = [
   { page: "account", label: "账号", hint: "云端同步" },
   { page: "preferences", label: "偏好", hint: "窗口与启动" },
-  { page: "effect", label: "灯效", hint: "颜色与亮度" },
+  { page: "effect", label: "灯效", hint: "颜色与灯效" },
   { page: "hardware", label: "硬件", hint: "灯盒连接" },
 ];
 
@@ -116,7 +118,8 @@ interface PetSettingsPanelProps {
   onLeaderboardAgentChange: (agentProvider: AgentProvider) => Promise<void>;
   onLeaderboardTimePeriodChange: (timePeriod: LeaderboardTimePeriod) => Promise<void>;
   onProbeHardware: () => Promise<void>;
-  onTrigger: (state: AgentState) => void;
+  onPreviewHardwareLight: (state: AgentState, settings?: LightSettings) => void;
+  onRestoreHardwareLight: () => Promise<void>;
   onExitApp: () => void;
 }
 
@@ -147,11 +150,13 @@ export function PetSettingsPanel({
   onLeaderboardAgentChange,
   onLeaderboardTimePeriodChange,
   onProbeHardware,
-  onTrigger,
+  onPreviewHardwareLight,
+  onRestoreHardwareLight,
   onExitApp,
 }: PetSettingsPanelProps) {
   const [activePage, setActivePage] = useState<SettingsPage>("overview");
   const [selectedLightState, setSelectedLightState] = useState<AgentState>(event.state);
+  const previousPageRef = useRef<SettingsPage>("overview");
   const currentDefinition = statusDefinitions[event.state];
   const currentMessage = event.message || currentDefinition.description;
 
@@ -179,28 +184,44 @@ export function PetSettingsPanel({
     setSelectedLightState(event.state);
   }, [event.state]);
 
-  const closeClick = useGuardedClick(onClose);
+  useEffect(() => {
+    const previousPage = previousPageRef.current;
+    previousPageRef.current = activePage;
+    if (previousPage === "effect" && activePage !== "effect") {
+      void onRestoreHardwareLight();
+    }
+  }, [activePage, onRestoreHardwareLight]);
+
+  useEffect(() => {
+    if (activePage !== "effect") {
+      return;
+    }
+    onPreviewHardwareLight(selectedLightState);
+  }, [activePage, onPreviewHardwareLight, selectedLightState]);
+
+  const closeClick = useGuardedClick(async () => {
+    if (activePage === "effect") {
+      await onRestoreHardwareLight();
+    }
+    await onClose();
+  });
   const tabClick = useGuardedClick((page: SettingsPage) => setActivePage(page), { lockWhileBusy: false });
   const probeClick = useGuardedClick(onProbeHardware);
 
   function previewLightState(state: AgentState) {
     setSelectedLightState(state);
-    if (event.state !== state) {
-      onTrigger(state);
-    }
   }
 
   function updateLightState(state: AgentState, update: Partial<LightSettings[AgentState]>) {
-    onLightSettingsChange({
+    const nextSettings = {
       ...lightSettings,
       [state]: {
         ...lightSettings[state],
         ...update,
       },
-    });
-    if (event.state !== state) {
-      onTrigger(state);
-    }
+    };
+    onLightSettingsChange(nextSettings);
+    onPreviewHardwareLight(state, nextSettings);
   }
 
   const activeNav = findNavItem(activePage) ?? DISPLAY_NAV[0];
@@ -208,7 +229,10 @@ export function PetSettingsPanel({
   const showingDisplay = isDisplayPage(activePage);
 
   return (
-    <main className={`settings-shell settings-shell--${event.state}`}>
+    <main
+      className={`settings-shell settings-shell--${event.state}`}
+      style={lightStateCssVars(event.state, lightSettings) as CSSProperties}
+    >
       <div className="settings-app" aria-label="Agent Light 控制台">
         <aside className="settings-sidebar">
           <div className="settings-sidebar__brand" data-tauri-drag-region>
@@ -276,6 +300,7 @@ export function PetSettingsPanel({
                 message={currentMessage}
                 aiToolLabel={activeAiToolName}
                 hardwareLabel={formatHardwareState(hardwareStatus)}
+                lightSettings={lightSettings}
               />
             ) : null}
           </header>
@@ -353,19 +378,22 @@ function StatusStrip({
   message,
   aiToolLabel,
   hardwareLabel,
+  lightSettings,
 }: {
   state: AgentState;
   stateLabel: string;
   message: string;
   aiToolLabel: string;
   hardwareLabel: string;
+  lightSettings: LightSettings;
 }) {
+  const displayColor = lightStateDisplayColor(state, lightSettings);
   return (
     <div className="settings-status-strip" aria-label="运行摘要">
       <article className="settings-status-strip__primary">
         <span
           className="settings-status-strip__dot"
-          style={{ backgroundColor: defaultPalette[state], color: defaultPalette[state] }}
+          style={{ backgroundColor: displayColor, color: displayColor }}
           aria-hidden="true"
         />
         <div>
@@ -824,6 +852,11 @@ function LeaderboardPanel({
   const selfEntry = data?.entries.find((entry) => entry.user_id === selfUserId) ?? null;
   const maxTokens = data?.entries.reduce((peak, entry) => Math.max(peak, entry.tokens_used), 0) ?? 0;
   const accent = resolveLeaderboardAccent(activeProvider);
+  const hasCloudSession = cloudSession != null;
+  const selfRankHint = selfEntry
+    ? `用量 ${formatTokenCount(selfEntry.tokens_used)}`
+    : resolveLeaderboardSelfRankHint(hasCloudSession, data?.current_user_rank);
+  const emptyHint = resolveLeaderboardEmptyHint(hasCloudSession);
 
   return (
     <div className="settings-body settings-body--leaderboard">
@@ -855,7 +888,7 @@ function LeaderboardPanel({
           <div className="leaderboard-hero__rank">
             <span>我的排名</span>
             <strong>{data?.current_user_rank ? `#${data.current_user_rank}` : "—"}</strong>
-            <small>{selfEntry ? `用量 ${formatTokenCount(selfEntry.tokens_used)}` : "登录并同步后可显示个人排名"}</small>
+            <small>{selfRankHint}</small>
           </div>
           <div className="leaderboard-hero__stats">
             <article>
@@ -974,7 +1007,7 @@ function LeaderboardPanel({
             ) : (
               <div className="leaderboard-empty" role="row">
                 <strong>{status === "error" ? "读取失败" : "暂无排行榜数据"}</strong>
-                <span>{status === "error" ? error : "开启云端同步并上报用量后，这里会显示排名。"}</span>
+                <span>{status === "error" ? error : emptyHint}</span>
               </div>
             )}
           </div>
@@ -1050,31 +1083,54 @@ function EffectPanel({
 }: EffectPanelProps) {
   const previewClick = useGuardedClick(onPreviewLightState, { lockWhileBusy: false });
   const selectedLight = lightSettings[selectedLightState];
+  const selectedDefinition = statusDefinitions[selectedLightState];
   return (
     <div className="settings-body settings-body--effect">
       <section className="settings-section settings-section--light" aria-labelledby="light-settings-heading">
         <div className="settings-section__title">
-          <h2 id="light-settings-heading">灯光</h2>
-        </div>
-        <div className="settings-light-layout">
-          <div className="settings-light-states" role="tablist" aria-label="灯光状态">
-            {agentStates.map((state) => (
-              <button
-                className={selectedLightState === state ? "is-active" : ""}
-                key={state}
-                type="button"
-                disabled={previewClick.busy}
-                onClick={() => previewClick.onClick(state)}
-              >
-                <span
-                  className="settings-light-states__swatch"
-                  style={{ backgroundColor: lightSettings[state].color, color: lightSettings[state].color }}
-                  aria-hidden="true"
-                />
-                {statusDefinitions[state].label}
-              </button>
-            ))}
+          <div>
+            <h2 id="light-settings-heading">灯光</h2>
+            <p className="settings-section__hint">为每种状态单独设置颜色、亮度与灯效，右侧会实时预览硬件灯盒</p>
           </div>
+        </div>
+
+        <div className="settings-light-states" role="tablist" aria-label="灯光状态">
+          {agentStates.map((state) => (
+            <button
+              className={selectedLightState === state ? "is-active" : ""}
+              key={state}
+              type="button"
+              role="tab"
+              aria-selected={selectedLightState === state}
+              disabled={previewClick.busy}
+              onClick={() => previewClick.onClick(state)}
+            >
+              <span
+                className="settings-light-states__swatch"
+                style={{
+                  backgroundColor: lightStateDisplayColor(state, lightSettings),
+                  color: lightStateDisplayColor(state, lightSettings),
+                }}
+                aria-hidden="true"
+              />
+              {statusDefinitions[state].label}
+            </button>
+          ))}
+        </div>
+
+        <article className="settings-light-editor" aria-label={`${selectedDefinition.label} 灯光设置`}>
+          <header className="settings-light-editor__header">
+            <span
+              className="settings-light-editor__preview"
+              style={{ backgroundColor: lightStateDisplayColor(selectedLightState, lightSettings) }}
+              aria-hidden="true"
+            />
+            <div>
+              <strong>{selectedDefinition.label}</strong>
+              <small>{selectedDefinition.description}</small>
+            </div>
+          </header>
+
           <div className="settings-light-controls">
             <label className="settings-color-field">
               <span>颜色</span>
@@ -1085,6 +1141,7 @@ function EffectPanel({
               />
               <strong>{selectedLight.color.toUpperCase()}</strong>
             </label>
+
             <label className="settings-range-field">
               <span>亮度</span>
               <input
@@ -1093,14 +1150,36 @@ function EffectPanel({
                 max="100"
                 step="5"
                 value={selectedLight.brightness}
-                onChange={(event) =>
-                  onUpdateLightState(selectedLightState, { brightness: Number(event.target.value) })
+                onInput={(event) =>
+                  onUpdateLightState(selectedLightState, {
+                    brightness: Number((event.target as HTMLInputElement).value),
+                  })
                 }
               />
               <strong>{selectedLight.brightness}%</strong>
             </label>
+
+            <div className="settings-mode-field">
+              <span className="settings-mode-field__label">灯效</span>
+              <div className="settings-mode-switch" role="radiogroup" aria-label="灯效模式">
+                {lightModes.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    role="radio"
+                    aria-checked={selectedLight.mode === mode}
+                    className={selectedLight.mode === mode ? "is-active" : ""}
+                    title={lightModeHints[mode]}
+                    onClick={() => onUpdateLightState(selectedLightState, { mode })}
+                  >
+                    {lightModeLabels[mode]}
+                  </button>
+                ))}
+              </div>
+              <p className="settings-mode-field__hint">{lightModeHints[selectedLight.mode]}</p>
+            </div>
           </div>
-        </div>
+        </article>
       </section>
     </div>
   );
@@ -1119,7 +1198,6 @@ function HardwarePanel({
 }: HardwarePanelProps) {
   const hardwareStateLabel = formatHardwareState(hardwareStatus);
   const isOnline = Boolean(hardwareStatus?.enabled && hardwareStatus.connected);
-  const availablePorts = hardwareStatus?.available_ports ?? [];
   const troubleshooting = formatHardwareTroubleshooting(hardwareStatus);
 
   return (
@@ -1139,16 +1217,10 @@ function HardwarePanel({
           </div>
           <p className="hardware-connect__detail">{formatHardwareDetail(hardwareStatus)}</p>
         </div>
-        {IS_DEV_BUILD ? (
-          <div className="hardware-connect__meta">
-            <span>串口</span>
-            <strong>{hardwareStatus?.port ?? (availablePorts[0] ?? "--")}</strong>
-          </div>
-        ) : null}
       </section>
 
       {!isOnline ? (
-        <section className="settings-section" aria-labelledby="hardware-troubleshoot-heading">
+        <section className="settings-section hardware-help" aria-labelledby="hardware-troubleshoot-heading">
           <div className="settings-section__title">
             <h2 id="hardware-troubleshoot-heading">连接帮助</h2>
             <button
@@ -1160,24 +1232,15 @@ function HardwarePanel({
               {probeBusy ? "检测中" : "重新检测"}
             </button>
           </div>
-          <p className="hardware-connect__detail">{troubleshooting.summary}</p>
-          {IS_DEV_BUILD ? (
-            <dl className="hardware-specs">
-              <div className="hardware-specs__item">
-                <dt>系统可见串口</dt>
-                <dd>{troubleshooting.portsLabel}</dd>
-              </div>
-              <div className="hardware-specs__item">
-                <dt>指定端口</dt>
-                <dd>{troubleshooting.envHint}</dd>
-              </div>
-            </dl>
-          ) : null}
-          <ul className="hardware-connect__detail" style={{ margin: "10px 0 0", paddingLeft: "18px" }}>
+          <p className="hardware-help__summary">{troubleshooting.summary}</p>
+          <ul className="hardware-help__steps">
             {troubleshooting.steps.map((step) => (
               <li key={step}>{step}</li>
             ))}
           </ul>
+          {IS_DEV_BUILD && troubleshooting.devNote ? (
+            <p className="hardware-help__dev">{troubleshooting.devNote}</p>
+          ) : null}
         </section>
       ) : IS_DEV_BUILD ? (
         <dl className="hardware-specs" aria-label="硬件参数">
@@ -1290,71 +1353,70 @@ function formatHardwareState(snapshot: HardwareStatusSnapshot | null): string {
 
 function formatHardwareDetail(snapshot: HardwareStatusSnapshot | null): string {
   if (!snapshot) {
-    return "正在检测灯盒连接";
+    return "正在检测灯盒连接…";
   }
   if (!snapshot.enabled) {
     return "硬件灯效未启用";
   }
   if (snapshot.connected) {
     const state = snapshot.last_state ? statusDefinitions[snapshot.last_state].label : "待命中";
-    return `灯盒已连接，当前 ${state}`;
-  }
-  if (snapshot.last_error) {
-    return snapshot.last_error;
+    return `当前 ${state}`;
   }
   if (snapshot.available_ports.length > 0) {
-    return "已检测到设备，正在建立连接…";
+    return `已发现 ${snapshot.available_ports.join("、")}，尚未连接`;
   }
-  return "请用 USB 数据线连接灯盒控制器";
+  return "未检测到 USB 串口设备";
 }
 
 function formatHardwareTroubleshooting(snapshot: HardwareStatusSnapshot | null) {
   const ports = snapshot?.available_ports ?? [];
-  const portsLabel = ports.length > 0 ? ports.join("、") : "无（系统未枚举到任何 COM 口）";
   const envHint =
     ports.length > 0
       ? `$env:AGENT_LIGHT_SERIAL_PORT="${ports[0]}"`
       : `$env:AGENT_LIGHT_SERIAL_PORT="COM5"`;
 
   const summary =
-    snapshot?.last_error ??
-    (ports.length > 0
-      ? "已检测到 USB 设备，但尚未与灯盒建立连接。"
-      : "未检测到灯盒，请检查连接与驱动。");
+    ports.length > 0
+      ? "系统已看到 USB 串口，但还没和灯盒握手成功。"
+      : "系统还没枚举到灯盒串口，先检查线缆和驱动。";
 
   const userSteps =
     ports.length > 0
       ? [
-          "确认灯盒控制器已通过 USB 连接到电脑",
-          "关闭可能占用端口的其他程序（如串口监视器）",
-          "重新插拔 USB 线后点击「重新检测」",
+          "确认灯盒已通过 USB 连接到电脑",
+          "关闭 Arduino 串口监视器等可能占用端口的程序",
+          "重新插拔 USB 线，再点「重新检测」",
         ]
       : [
-          "检查 USB 数据线是否支持数据传输（有些线只能充电）",
-          "打开设备管理器，查看是否出现新的 USB 串口设备",
-          "若显示未知设备，请安装 CP210x 或 CH340 驱动后重插",
-          "连接成功后点击「重新检测」",
+          "换一根支持数据传输的 USB 线（有些线只能充电）",
+          "在设备管理器查看是否出现新的 USB 串口设备",
+          "若有未知设备，安装 CP210x 或 CH340 驱动后重插",
+          "驱动就绪后点击「重新检测」",
         ];
 
   const devSteps =
     ports.length > 0
       ? [
-          "在设备管理器确认 ESP32 对应哪一个 COM 号",
-          `若自动连接失败，在 PowerShell 执行：${envHint}`,
-          "设置环境变量后重启 Agent Light",
-          "确认没有 Arduino 串口监视器等程序占用端口",
+          "在设备管理器确认 ESP32 对应的 COM 号",
+          "关闭占用端口的程序后重试",
+          "仍失败时，设置环境变量并重启应用（见下方）",
         ]
       : [
-          "检查 USB 数据线是否支持数据传输（有些线只能充电）",
-          "打开设备管理器，查看「端口 (COM 和 LPT)」是否出现新设备",
-          "若显示未知设备或黄色叹号，安装 CP210x 或 CH340 驱动后重插",
-          `驱动就绪后，可用 PowerShell 指定端口：${envHint}`,
+          "确认 USB 线支持数据传输",
+          "设备管理器 →「端口 (COM 和 LPT)」检查是否出现新设备",
+          "驱动安装完成后重插，再点「重新检测」",
         ];
+
+  const portsLabel = ports.length > 0 ? ports.join("、") : "无";
+  const devNote = IS_DEV_BUILD
+    ? ports.length > 0
+      ? `可见串口：${portsLabel} · 手动指定：${envHint}`
+      : `可见串口：${portsLabel} · 驱动就绪后可执行：${envHint}`
+    : null;
 
   return {
     summary,
-    portsLabel,
-    envHint,
+    devNote,
     steps: IS_DEV_BUILD ? devSteps : userSteps,
   };
 }

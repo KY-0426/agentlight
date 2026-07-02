@@ -224,6 +224,41 @@ describe("admin user routes", () => {
     expect(enabled.statusCode).toBe(200);
     expect(enabled.json().data.disabled_at).toBeNull();
   });
+
+  it("keeps device_count consistent between user list and detail", async () => {
+    const { app, authRepository } = await createTestApp();
+    const user = await seedPhoneUser(authRepository);
+    const memberships = await authRepository.listMemberships(user.id);
+    await authRepository.upsertDevice({
+      userId: user.id,
+      workspaceId: memberships[0]!.membership.workspaceId,
+      installationId: "test-installation-001",
+      platform: "windows",
+      appVersion: "0.1.5",
+    });
+    const headers = await loginAsAdmin(app);
+
+    const listed = await app.inject({
+      method: "GET",
+      url: `/api/admin/users?type=phone&q=${encodeURIComponent(user.phoneNumber!)}&limit=10&offset=0`,
+      headers,
+    });
+
+    expect(listed.statusCode).toBe(200);
+    const listItem = listed.json().data.items.find((item: { id: string }) => item.id === user.id);
+    expect(listItem?.device_count).toBe(1);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/api/admin/users/${user.id}`,
+      headers,
+    });
+
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().data.user.device_count).toBe(1);
+    expect(detail.json().data.devices).toHaveLength(1);
+    expect(listItem?.device_count).toBe(detail.json().data.user.device_count);
+  });
 });
 
 describe("admin account routes", () => {

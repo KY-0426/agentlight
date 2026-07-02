@@ -22,4 +22,8 @@ if (Test-Path $vswhere) {
 }
 
 Set-Location (Join-Path $PSScriptRoot "..")
+
+# Debug builds skip usage sync unless explicitly enabled; dev script turns it on by default.
+$env:AGENT_LIGHT_ENABLE_USAGE_SYNC = "1"
+
 npm run tauri:dev @args

@@ -24,7 +24,10 @@ export function HardwareDebugPanel({
   onTrigger,
 }: HardwareDebugPanelProps) {
   const refreshClick = useGuardedClick(onRefresh);
-  const triggerClick = useGuardedClick((state: AgentState, message?: string) => onTrigger(state, message));
+  const triggerClick = useGuardedClick((state: AgentState, message?: string) => onTrigger(state, message), {
+    lockWhileBusy: false,
+    waitMs: 120,
+  });
 
   return (
     <main className={`settings-shell settings-shell--${event.state}`}>

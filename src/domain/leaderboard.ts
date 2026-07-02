@@ -216,6 +216,29 @@ export function getApiErrorMessage(value: unknown): string | null {
   return typeof value.error.message === "string" ? value.error.message : null;
 }
 
+export function resolveLeaderboardSelfRankHint(
+  hasCloudSession: boolean,
+  currentUserRank: number | null | undefined,
+): string {
+  if (!hasCloudSession) {
+    return "登录并开启云端同步后可显示个人排名";
+  }
+
+  if (currentUserRank != null) {
+    return `已排名第 ${currentUserRank}，当前页仅展示前若干名`;
+  }
+
+  return "同步已开启，产生用量后将显示个人排名";
+}
+
+export function resolveLeaderboardEmptyHint(hasCloudSession: boolean): string {
+  if (!hasCloudSession) {
+    return "开启云端同步并上报用量后，这里会显示排名。";
+  }
+
+  return "同步已开启，使用 AI 工具产生用量并上报后，这里会显示排名。";
+}
+
 function formatLocalDate(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");

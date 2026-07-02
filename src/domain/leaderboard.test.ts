@@ -5,6 +5,8 @@ import {
   normalizeLeaderboardServerUrl,
   parseTokenLeaderboardResponse,
   resolveLeaderboardDateRange,
+  resolveLeaderboardEmptyHint,
+  resolveLeaderboardSelfRankHint,
 } from "./leaderboard";
 
 describe("leaderboard domain", () => {
@@ -88,6 +90,15 @@ describe("leaderboard domain", () => {
     expect(normalizeLeaderboardLimit(undefined)).toBe(20);
     expect(normalizeLeaderboardLimit(0)).toBe(1);
     expect(normalizeLeaderboardLimit(150)).toBe(100);
+  });
+
+  it("describes leaderboard empty states based on cloud session", () => {
+    expect(resolveLeaderboardSelfRankHint(false, null)).toBe("登录并开启云端同步后可显示个人排名");
+    expect(resolveLeaderboardSelfRankHint(true, null)).toBe("同步已开启，产生用量后将显示个人排名");
+    expect(resolveLeaderboardSelfRankHint(true, 8)).toBe("已排名第 8，当前页仅展示前若干名");
+
+    expect(resolveLeaderboardEmptyHint(false)).toBe("开启云端同步并上报用量后，这里会显示排名。");
+    expect(resolveLeaderboardEmptyHint(true)).toBe("同步已开启，使用 AI 工具产生用量并上报后，这里会显示排名。");
   });
 
   it("parses the success envelope without accepting malformed entries", () => {

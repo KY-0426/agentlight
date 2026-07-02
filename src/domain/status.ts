@@ -10,19 +10,38 @@ export interface AgentStatusEvent {
   timestamp_ms: number;
 }
 
+export const lightModes = ["steady", "breathe", "pulse", "repeat_pulse"] as const;
+
+export type LightMode = (typeof lightModes)[number];
+
 export interface StatusDefinition {
   label: string;
   description: string;
   defaultColor: string;
   glowColor: string;
-  mode: "steady" | "breathe" | "pulse" | "repeat_pulse";
+  mode: LightMode;
 }
 
 export type StatusPalette = Record<AgentState, string>;
 export interface LightStateSettings {
   color: string;
   brightness: number;
+  mode: LightMode;
 }
+
+export const lightModeLabels: Record<LightMode, string> = {
+  steady: "常亮",
+  breathe: "呼吸",
+  pulse: "闪烁",
+  repeat_pulse: "连闪",
+};
+
+export const lightModeHints: Record<LightMode, string> = {
+  steady: "保持固定亮度",
+  breathe: "缓慢明暗起伏",
+  pulse: "单次明暗脉冲",
+  repeat_pulse: "连续闪烁提醒",
+};
 
 export type LightSettings = Record<AgentState, LightStateSettings>;
 
@@ -73,24 +92,24 @@ export const defaultPalette: StatusPalette = agentStates.reduce(
   {} as StatusPalette,
 );
 
-export const defaultLightSettings: LightSettings = {
-  standby: {
-    color: "#0000ff",
-    brightness: 100,
-  },
-  working: {
-    color: "#ffbf00",
-    brightness: 100,
-  },
-  completed: {
-    color: "#00ff00",
-    brightness: 100,
-  },
-  attention: {
-    color: "#ff0000",
-    brightness: 100,
-  },
+const defaultLightSettingsColors: Record<AgentState, string> = {
+  standby: "#0000ff",
+  working: "#ffbf00",
+  completed: "#00ff00",
+  attention: "#ff0000",
 };
+
+export const defaultLightSettings: LightSettings = agentStates.reduce(
+  (settings, state) => ({
+    ...settings,
+    [state]: {
+      color: defaultLightSettingsColors[state],
+      brightness: 100,
+      mode: statusDefinitions[state].mode,
+    },
+  }),
+  {} as LightSettings,
+);
 
 export function isAgentState(value: unknown): value is AgentState {
   return typeof value === "string" && agentStates.includes(value as AgentState);
@@ -122,6 +141,7 @@ export function normalizeLightSettings(value: unknown): LightSettings {
     settings[state] = {
       color: normalizeHexColor(stateInput.color, fallback.color),
       brightness: normalizeBrightness(stateInput.brightness, fallback.brightness),
+      mode: normalizeLightMode(stateInput.mode, fallback.mode),
     };
     return settings;
   }, {} as LightSettings);
@@ -134,6 +154,74 @@ export function hexToRgb(color: string): { red: number; green: number; blue: num
     green: Number.parseInt(normalized.slice(2, 4), 16),
     blue: Number.parseInt(normalized.slice(4, 6), 16),
   };
+}
+
+export function scaleHexColorByBrightness(color: string, brightness: number): string {
+  const { red, green, blue } = hexToRgb(color);
+  const factor = Math.min(100, Math.max(0, brightness)) / 100;
+  const channel = (value: number) =>
+    Math.min(255, Math.max(0, Math.round(value * factor)))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${channel(red)}${channel(green)}${channel(blue)}`;
+}
+
+export function lightGlowColor(color: string, brightness: number, alpha = 0.48): string {
+  const { red, green, blue } = hexToRgb(color);
+  const factor = Math.min(100, Math.max(0, brightness)) / 100;
+  const glowAlpha = alpha * (0.35 + factor * 0.65);
+  return `rgba(${Math.round(red * factor)}, ${Math.round(green * factor)}, ${Math.round(blue * factor)}, ${glowAlpha.toFixed(2)})`;
+}
+
+export function lightStateCssVars(
+  state: AgentState,
+  settings: LightSettings,
+): Record<"--state-color" | "--state-glow", string> {
+  const { color, brightness } = settings[state];
+  return {
+    "--state-color": scaleHexColorByBrightness(color, brightness),
+    "--state-glow": lightGlowColor(color, brightness),
+  };
+}
+
+export function lightStateDisplayColor(state: AgentState, settings: LightSettings): string {
+  const { color, brightness } = settings[state];
+  return scaleHexColorByBrightness(color, brightness);
+}
+
+export function rgbToHex(red: number, green: number, blue: number): string {
+  const channel = (value: number) =>
+    Math.min(255, Math.max(0, Math.round(value)))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${channel(red)}${channel(green)}${channel(blue)}`;
+}
+
+export function hardwareLightSettingsToLightSettings(
+  remote: Record<
+    AgentState,
+    { red: number; green: number; blue: number; brightness: number; mode?: string | null }
+  >,
+): LightSettings {
+  return agentStates.reduce((settings, state) => {
+    const entry = remote[state];
+    const fallback = defaultLightSettings[state];
+    settings[state] = {
+      color: rgbToHex(entry.red, entry.green, entry.blue),
+      brightness: entry.brightness,
+      mode: normalizeLightMode(entry.mode, fallback.mode),
+    };
+    return settings;
+  }, {} as LightSettings);
+}
+
+export function lightSettingsEqual(left: LightSettings, right: LightSettings): boolean {
+  return agentStates.every(
+    (state) =>
+      left[state].color === right[state].color &&
+      left[state].brightness === right[state].brightness &&
+      left[state].mode === right[state].mode,
+  );
 }
 
 function normalizeHexColor(value: unknown, fallback: string): string {
@@ -149,6 +237,14 @@ function normalizeBrightness(value: unknown, fallback: number): number {
     return fallback;
   }
   return Math.min(100, Math.max(0, Math.round(value)));
+}
+
+function normalizeLightMode(value: unknown, fallback: LightMode): LightMode {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const trimmed = value.trim();
+  return lightModes.includes(trimmed as LightMode) ? (trimmed as LightMode) : fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

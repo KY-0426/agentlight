@@ -1064,20 +1064,24 @@ export class DrizzleAuthRepository implements AuthRepository {
 
   async listUsersForAdmin(input: ListUsersForAdminInput): Promise<ListUsersForAdminResult> {
     const whereClause = buildAdminUserWhere(input);
-    const deviceCount = sql<number>`(
-      select cast(count(*) as signed)
-      from ${schema.devices}
-      where ${schema.devices.userId} = ${schema.users.id}
-    )`;
+    const deviceCountSubquery = this.db
+      .select({
+        userId: schema.devices.userId,
+        deviceCount: countStar.as("device_count"),
+      })
+      .from(schema.devices)
+      .groupBy(schema.devices.userId)
+      .as("device_counts");
 
     const [countRow] = await this.db.select({ total: countStar }).from(schema.users).where(whereClause);
 
     const rows = await this.db
       .select({
         user: schema.users,
-        deviceCount,
+        deviceCount: sql<number>`coalesce(${deviceCountSubquery.deviceCount}, 0)`,
       })
       .from(schema.users)
+      .leftJoin(deviceCountSubquery, eq(schema.users.id, deviceCountSubquery.userId))
       .where(whereClause)
       .orderBy(desc(schema.users.createdAt))
       .limit(input.limit)

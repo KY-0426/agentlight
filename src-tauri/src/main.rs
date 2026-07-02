@@ -47,6 +47,7 @@ const AGENT_MONITOR_INTERVAL_MS: u64 = 1_000;
 const MANUAL_STATUS_HOLD_MS: u128 = 60_000;
 const CLOUD_SESSION_FILE_NAME: &str = "cloud-session.json";
 const CLOUD_CONFIG_FILE_NAME: &str = "cloud-config.json";
+const LIGHT_SETTINGS_FILE_NAME: &str = "light-settings.json";
 const INSTALLATION_ID_FILE_NAME: &str = "installation-id";
 const MAX_CLOUD_URL_LEN: usize = 2048;
 const MAX_CLOUD_TOKEN_LEN: usize = 4096;
@@ -185,7 +186,7 @@ struct HardwareStatusSnapshot {
     updated_at_ms: u128,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct LightSettingsRequest {
     standby: LightStateSettingsRequest,
     working: LightStateSettingsRequest,
@@ -193,12 +194,39 @@ struct LightSettingsRequest {
     attention: LightStateSettingsRequest,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct LightStateSettingsRequest {
     red: u16,
     green: u16,
     blue: u16,
     brightness: u16,
+    #[serde(default)]
+    mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct SetLightSettingsOptions {
+    #[serde(default = "default_set_light_settings_persist")]
+    persist: bool,
+    #[serde(default = "default_set_light_settings_apply_agent_state")]
+    apply_agent_state: bool,
+}
+
+impl Default for SetLightSettingsOptions {
+    fn default() -> Self {
+        Self {
+            persist: true,
+            apply_agent_state: true,
+        }
+    }
+}
+
+fn default_set_light_settings_persist() -> bool {
+    true
+}
+
+fn default_set_light_settings_apply_agent_state() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,6 +243,50 @@ struct LightStateSettings {
     green: u8,
     blue: u8,
     brightness: u8,
+    mode: LightMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LightMode {
+    Steady,
+    Breathe,
+    Pulse,
+    RepeatPulse,
+}
+
+impl LightMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Steady => "steady",
+            Self::Breathe => "breathe",
+            Self::Pulse => "pulse",
+            Self::RepeatPulse => "repeat_pulse",
+        }
+    }
+
+    fn default_for_state(state: &'static str) -> Self {
+        match state {
+            "standby" => Self::Breathe,
+            "working" => Self::Steady,
+            "completed" => Self::RepeatPulse,
+            "attention" => Self::Pulse,
+            _ => Self::Steady,
+        }
+    }
+
+    fn parse(value: Option<String>, state: &'static str) -> Self {
+        match value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some("steady") => Self::Steady,
+            Some("breathe") => Self::Breathe,
+            Some("pulse") => Self::Pulse,
+            Some("repeat_pulse") => Self::RepeatPulse,
+            _ => Self::default_for_state(state),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -341,11 +413,38 @@ impl AgentRuntime {
     fn set_light_settings(
         &self,
         request: LightSettingsRequest,
+        options: SetLightSettingsOptions,
     ) -> Result<HardwareStatusSnapshot, CommandError> {
         let settings = LightSettings::try_from_request(request)?;
-        self.hardware.set_light_settings(settings)?;
+        self.hardware.set_light_settings(settings.clone())?;
+        if options.persist {
+            save_light_settings(&settings)?;
+        }
+        if options.apply_agent_state {
+            let snapshot = self.snapshot()?;
+            self.hardware.apply(&snapshot);
+        }
+        self.hardware_snapshot()
+    }
+
+    fn get_light_settings(&self) -> Result<LightSettingsRequest, CommandError> {
+        self.hardware
+            .light_settings()
+            .map(LightSettingsRequest::from)
+    }
+
+    fn preview_hardware_light(
+        &self,
+        state: AgentStatus,
+    ) -> Result<HardwareStatusSnapshot, CommandError> {
+        let sequence = self.snapshot()?.sequence;
+        self.hardware.preview_state_blocking(state, sequence);
+        self.hardware_snapshot()
+    }
+
+    fn restore_hardware_light(&self) -> Result<HardwareStatusSnapshot, CommandError> {
         let snapshot = self.snapshot()?;
-        self.hardware.apply(&snapshot);
+        self.hardware.restore_to_snapshot(&snapshot);
         self.hardware_snapshot()
     }
 
@@ -367,32 +466,38 @@ impl AgentRuntime {
 
     fn start_hardware_watcher(&self) {
         let runtime = self.clone();
-        thread::spawn(move || loop {
-            let wait_ms = {
-                match runtime.hardware.snapshot() {
-                    Ok(snapshot) if snapshot.connected => HARDWARE_WATCHER_INTERVAL_MS,
-                    Ok(snapshot)
-                        if snapshot.available_ports.is_empty() && snapshot.port.is_none() =>
-                    {
-                        12_000
-                    }
-                    _ => HARDWARE_WATCHER_RETRY_INTERVAL_MS,
+        thread::spawn(move || {
+            let mut first_tick = true;
+            loop {
+                if !first_tick {
+                    let wait_ms = {
+                        match runtime.hardware.snapshot() {
+                            Ok(snapshot) if snapshot.connected => HARDWARE_WATCHER_INTERVAL_MS,
+                            Ok(snapshot)
+                                if snapshot.available_ports.is_empty() && snapshot.port.is_none() =>
+                            {
+                                12_000
+                            }
+                            _ => HARDWARE_WATCHER_RETRY_INTERVAL_MS,
+                        }
+                    };
+                    thread::sleep(Duration::from_millis(wait_ms));
                 }
-            };
-            thread::sleep(Duration::from_millis(wait_ms));
+                first_tick = false;
 
-            let snapshot = match runtime.snapshot() {
-                Ok(snapshot) => snapshot,
-                Err(_) => continue,
-            };
+                let snapshot = match runtime.snapshot() {
+                    Ok(snapshot) => snapshot,
+                    Err(_) => continue,
+                };
 
-            let changed = runtime.hardware.probe_and_sync(&snapshot);
-            if let Some(hardware_snapshot) = changed {
-                let handle = runtime.app_handle.lock();
-                if let Ok(handle) = handle {
-                    if let Some(app) = handle.as_ref() {
-                        if let Err(error) = app.emit(HARDWARE_STATE_EVENT, &hardware_snapshot) {
-                            eprintln!("agent-light: failed to emit hardware state event: {error}");
+                let changed = runtime.hardware.probe_and_sync(&snapshot);
+                if let Some(hardware_snapshot) = changed {
+                    let handle = runtime.app_handle.lock();
+                    if let Ok(handle) = handle {
+                        if let Some(app) = handle.as_ref() {
+                            if let Err(error) = app.emit(HARDWARE_STATE_EVENT, &hardware_snapshot) {
+                                eprintln!("agent-light: failed to emit hardware state event: {error}");
+                            }
                         }
                     }
                 }
@@ -426,24 +531,28 @@ impl Default for LightSettings {
                 green: 0,
                 blue: 255,
                 brightness: 100,
+                mode: LightMode::Breathe,
             },
             working: LightStateSettings {
                 red: 255,
                 green: 191,
                 blue: 0,
                 brightness: 100,
+                mode: LightMode::Steady,
             },
             completed: LightStateSettings {
                 red: 0,
                 green: 255,
                 blue: 0,
                 brightness: 100,
+                mode: LightMode::RepeatPulse,
             },
             attention: LightStateSettings {
                 red: 255,
                 green: 0,
                 blue: 0,
                 brightness: 100,
+                mode: LightMode::Pulse,
             },
         }
     }
@@ -459,6 +568,10 @@ impl LightSettings {
         })
     }
 
+    fn try_from_request_or_default(request: LightSettingsRequest) -> Self {
+        Self::try_from_request(request).unwrap_or_default()
+    }
+
     fn frame_for_status(&self, status: &AgentStatus) -> HardwareFrame {
         let settings = match status {
             AgentStatus::Standby => self.standby,
@@ -466,17 +579,33 @@ impl LightSettings {
             AgentStatus::Completed => self.completed,
             AgentStatus::Attention => self.attention,
         };
-        let mode = match status {
-            AgentStatus::Standby => "breathe",
-            AgentStatus::Working => "steady",
-            AgentStatus::Completed => "repeat_pulse",
-            AgentStatus::Attention => "pulse",
-        };
+        let mode = settings.mode.as_str();
         HardwareFrame {
             red: scale_light_channel(settings.red, settings.brightness),
             green: scale_light_channel(settings.green, settings.brightness),
             blue: scale_light_channel(settings.blue, settings.brightness),
             mode,
+        }
+    }
+}
+
+impl From<LightSettings> for LightSettingsRequest {
+    fn from(settings: LightSettings) -> Self {
+        fn state(value: LightStateSettings) -> LightStateSettingsRequest {
+            LightStateSettingsRequest {
+                red: u16::from(value.red),
+                green: u16::from(value.green),
+                blue: u16::from(value.blue),
+                brightness: u16::from(value.brightness),
+                mode: Some(value.mode.as_str().to_string()),
+            }
+        }
+
+        Self {
+            standby: state(settings.standby),
+            working: state(settings.working),
+            completed: state(settings.completed),
+            attention: state(settings.attention),
         }
     }
 }
@@ -496,6 +625,7 @@ fn validate_light_state(
         green: request.green as u8,
         blue: request.blue as u8,
         brightness: request.brightness as u8,
+        mode: LightMode::parse(request.mode, state),
     })
 }
 
@@ -570,7 +700,7 @@ impl HardwareRuntime {
                 enabled,
                 explicit_port,
                 baud,
-                light_settings: LightSettings::default(),
+                light_settings: load_light_settings(),
                 port: None,
                 connected: false,
                 firmware_version: None,
@@ -635,6 +765,16 @@ impl HardwareRuntime {
             })
     }
 
+    fn light_settings(&self) -> Result<LightSettings, CommandError> {
+        self.inner
+            .lock()
+            .map(|inner| inner.light_settings)
+            .map_err(|_| CommandError {
+                code: "hardware_lock_failed",
+                message: "Could not read hardware light settings".to_string(),
+            })
+    }
+
     fn snapshot(&self) -> Result<HardwareStatusSnapshot, CommandError> {
         self.inner
             .lock()
@@ -682,6 +822,45 @@ impl HardwareRuntime {
         self.apply_blocking(snapshot);
         self.snapshot()
     }
+
+    fn preview_state_blocking(&self, state: AgentStatus, sequence: u64) {
+        let (plan, baud) = {
+            let mut inner = match self.inner.lock() {
+                Ok(inner) => inner,
+                Err(_) => {
+                    eprintln!("agent-light: hardware state lock failed");
+                    return;
+                }
+            };
+
+            let baud = inner.baud;
+            let plan = match inner.prepare_preview_write(&state, sequence) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    inner.mark_error(error);
+                    return;
+                }
+            };
+            (plan, baud)
+        };
+
+        let Some(plan) = plan else {
+            return;
+        };
+
+        let result = serial_io::write_serial_command(&plan.port, baud, &plan.command);
+        match self.inner.lock() {
+            Ok(mut inner) => inner.record_write_result(&plan.state, result),
+            Err(_) => eprintln!("agent-light: hardware state lock failed"),
+        }
+    }
+
+    fn restore_to_snapshot(&self, snapshot: &StatusSnapshot) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.last_state = None;
+        }
+        self.apply_blocking(snapshot);
+    }
 }
 
 impl HardwareRuntimeInner {
@@ -721,26 +900,50 @@ impl HardwareRuntimeInner {
             return Ok(None);
         }
 
+        self.build_write_plan(&snapshot.state, snapshot.sequence)
+            .map(Some)
+    }
+
+    fn prepare_preview_write(
+        &mut self,
+        state: &AgentStatus,
+        sequence: u64,
+    ) -> Result<Option<HardwareWritePlan>, String> {
+        if !self.enabled {
+            self.connected = false;
+            self.last_error = None;
+            self.updated_at_ms = timestamp_ms();
+            return Ok(None);
+        }
+
+        self.build_write_plan(state, sequence).map(Some)
+    }
+
+    fn build_write_plan(
+        &mut self,
+        state: &AgentStatus,
+        sequence: u64,
+    ) -> Result<HardwareWritePlan, String> {
         let port = self.resolve_port()?;
         self.port = Some(port.clone());
 
-        let frame = self.light_settings.frame_for_status(&snapshot.state);
+        let frame = self.light_settings.frame_for_status(state);
         let command = format!(
             "AGENT_LIGHT protocol={} state={} r={} g={} b={} mode={} seq={}\n",
             HARDWARE_PROTOCOL,
-            snapshot.state.as_str(),
+            state.as_str(),
             frame.red,
             frame.green,
             frame.blue,
             frame.mode,
-            snapshot.sequence
+            sequence
         );
 
-        Ok(Some(HardwareWritePlan {
+        Ok(HardwareWritePlan {
             port,
             command,
-            state: snapshot.state.clone(),
-        }))
+            state: state.clone(),
+        })
     }
 
     fn record_write_result(
@@ -1223,8 +1426,29 @@ fn probe_hardware(runtime: State<'_, AgentRuntime>) -> Result<HardwareStatusSnap
 fn set_light_settings(
     runtime: State<'_, AgentRuntime>,
     request: LightSettingsRequest,
+    options: Option<SetLightSettingsOptions>,
 ) -> Result<HardwareStatusSnapshot, CommandError> {
-    runtime.set_light_settings(request)
+    runtime.set_light_settings(request, options.unwrap_or_default())
+}
+
+#[tauri::command]
+fn get_light_settings(runtime: State<'_, AgentRuntime>) -> Result<LightSettingsRequest, CommandError> {
+    runtime.get_light_settings()
+}
+
+#[tauri::command]
+fn preview_hardware_light(
+    runtime: State<'_, AgentRuntime>,
+    state: AgentStatus,
+) -> Result<HardwareStatusSnapshot, CommandError> {
+    runtime.preview_hardware_light(state)
+}
+
+#[tauri::command]
+fn restore_hardware_light(
+    runtime: State<'_, AgentRuntime>,
+) -> Result<HardwareStatusSnapshot, CommandError> {
+    runtime.restore_hardware_light()
 }
 
 #[tauri::command]
@@ -1486,6 +1710,9 @@ fn main() {
             get_hardware_status,
             probe_hardware,
             set_light_settings,
+            get_light_settings,
+            preview_hardware_light,
+            restore_hardware_light,
             sync_codex_agent_state,
             sync_cursor_agent_state,
             get_installation_id,
@@ -1570,6 +1797,73 @@ pub(crate) fn cloud_session_path() -> Result<PathBuf, CommandError> {
 
 fn cloud_config_path() -> Result<PathBuf, CommandError> {
     Ok(config_dir_path()?.join(CLOUD_CONFIG_FILE_NAME))
+}
+
+fn light_settings_path() -> Result<PathBuf, CommandError> {
+    Ok(config_dir_path()?.join(LIGHT_SETTINGS_FILE_NAME))
+}
+
+fn load_light_settings() -> LightSettings {
+    let Ok(path) = light_settings_path() else {
+        return LightSettings::default();
+    };
+    if !path.exists() {
+        return LightSettings::default();
+    }
+
+    let mut raw = String::new();
+    let Ok(mut file) = File::open(&path) else {
+        return LightSettings::default();
+    };
+    if file.read_to_string(&mut raw).is_err() {
+        return LightSettings::default();
+    }
+
+    match serde_json::from_str::<LightSettingsRequest>(&raw) {
+        Ok(request) => LightSettings::try_from_request_or_default(request),
+        Err(error) => {
+            eprintln!("agent-light: invalid light settings file: {error}");
+            LightSettings::default()
+        }
+    }
+}
+
+fn save_light_settings(settings: &LightSettings) -> Result<(), CommandError> {
+    let path = light_settings_path()?;
+    let dir = path.parent().ok_or(CommandError {
+        code: "light_settings_path_failed",
+        message: "Could not resolve light settings directory".to_string(),
+    })?;
+    create_dir_all(dir).map_err(|error| CommandError {
+        code: "light_settings_write_failed",
+        message: format!("Could not create light settings directory: {error}"),
+    })?;
+
+    let request = LightSettingsRequest::from(*settings);
+    let json = serde_json::to_string_pretty(&request).map_err(|_| CommandError {
+        code: "light_settings_write_failed",
+        message: "Could not serialize light settings".to_string(),
+    })?;
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .map_err(|error| CommandError {
+            code: "light_settings_write_failed",
+            message: format!("Could not open light settings file: {error}"),
+        })?;
+    file.write_all(json.as_bytes()).map_err(|error| CommandError {
+        code: "light_settings_write_failed",
+        message: format!("Could not write light settings: {error}"),
+    })?;
+    file.flush().map_err(|error| CommandError {
+        code: "light_settings_write_failed",
+        message: format!("Could not flush light settings: {error}"),
+    })?;
+    restrict_file_to_user(&path)?;
+    Ok(())
 }
 
 fn load_cloud_config() -> Result<CloudConfig, CommandError> {
@@ -2401,7 +2695,8 @@ mod tests {
     use super::{
         classify_codex_thread_activity, choose_serial_port, hardware_frame_for_status,
         AgentStatus, parse_hardware_serial_reply, CodexThreadActivity, HardwareFrame,
-        HardwareRuntime, HardwareRuntimeInner, LightSettings, LightStateSettings, StatusSnapshot,
+        HardwareRuntime, HardwareRuntimeInner, LightMode, LightSettings, LightSettingsRequest,
+        LightStateSettings, StatusSnapshot,
         HARDWARE_BAUD_DEFAULT, HARDWARE_PROTOCOL,
     };
     use std::sync::{Arc, Mutex};
@@ -2501,24 +2796,28 @@ mod tests {
                 green: 20,
                 blue: 200,
                 brightness: 50,
+                mode: LightMode::Breathe,
             },
             working: LightStateSettings {
                 red: 200,
                 green: 100,
                 blue: 50,
                 brightness: 40,
+                mode: LightMode::Steady,
             },
             completed: LightStateSettings {
                 red: 0,
                 green: 255,
                 blue: 0,
                 brightness: 100,
+                mode: LightMode::RepeatPulse,
             },
             attention: LightStateSettings {
                 red: 255,
                 green: 0,
                 blue: 0,
                 brightness: 100,
+                mode: LightMode::Pulse,
             },
         };
 
@@ -2570,6 +2869,43 @@ mod tests {
 
         let snapshot = runtime.snapshot().expect("snapshot");
         assert_eq!(snapshot.last_state, None);
+    }
+
+    #[test]
+    fn prepare_preview_write_skips_same_state_dedup() {
+        let mut inner = HardwareRuntimeInner {
+            enabled: true,
+            explicit_port: Some("/dev/cu.fake".to_string()),
+            baud: HARDWARE_BAUD_DEFAULT,
+            light_settings: LightSettings::default(),
+            port: Some("/dev/cu.fake".to_string()),
+            connected: true,
+            firmware_version: None,
+            protocol_version: None,
+            hardware_revision: None,
+            last_state: Some(AgentStatus::Standby),
+            last_error: None,
+            updated_at_ms: 0,
+        };
+
+        let deduped = inner
+            .prepare_write(&StatusSnapshot {
+                state: AgentStatus::Standby,
+                message: None,
+                source: "test".to_string(),
+                sequence: 9,
+                timestamp_ms: 0,
+            })
+            .expect("prepare write");
+        assert!(deduped.is_none());
+
+        let preview = inner
+            .prepare_preview_write(&AgentStatus::Working, 10)
+            .expect("preview write")
+            .expect("preview plan");
+        assert_eq!(preview.state, AgentStatus::Working);
+        assert!(preview.command.contains("state=working"));
+        assert!(preview.command.contains("seq=10"));
     }
 
     #[test]
@@ -2727,6 +3063,45 @@ mod tests {
         assert!(plan.command.contains("protocol=agent-light-rgb-v1"));
         assert!(plan.command.contains("state=attention"));
         assert!(plan.command.contains("seq=42"));
+    }
+
+    #[test]
+    fn light_settings_request_roundtrip_matches_internal_settings() {
+        let settings = LightSettings {
+            standby: LightStateSettings {
+                red: 0,
+                green: 0,
+                blue: 255,
+                brightness: 100,
+                mode: LightMode::Steady,
+            },
+            working: LightStateSettings {
+                red: 255,
+                green: 191,
+                blue: 0,
+                brightness: 80,
+                mode: LightMode::Pulse,
+            },
+            completed: LightStateSettings {
+                red: 0,
+                green: 255,
+                blue: 30,
+                brightness: 100,
+                mode: LightMode::Breathe,
+            },
+            attention: LightStateSettings {
+                red: 255,
+                green: 0,
+                blue: 0,
+                brightness: 60,
+                mode: LightMode::RepeatPulse,
+            },
+        };
+
+        let request = LightSettingsRequest::from(settings);
+        let restored = LightSettings::try_from_request(request).expect("valid light settings");
+
+        assert_eq!(restored, settings);
     }
 
 }
