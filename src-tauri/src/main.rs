@@ -1692,7 +1692,16 @@ fn main() {
     let runtime = AgentRuntime::new();
     let managed_runtime = runtime.clone();
 
-    let app = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        builder = builder.plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ));
+    }
+
+    let app = builder
         .manage(managed_runtime)
         .invoke_handler(tauri::generate_handler![
             get_status,

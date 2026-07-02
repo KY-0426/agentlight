@@ -47,6 +47,7 @@ import {
   getCloudSyncEnabled,
   setAgentState,
   setAlwaysOnTop,
+  setLaunchAtLogin,
   setHardwareLightSettings,
   previewHardwareLight,
   restoreHardwareLight,
@@ -68,6 +69,7 @@ const FIXED_MOTION_SPEED = 760;
 const AGENT_STATUS_REFRESH_MS = 15_000;
 const SYSTEM_METRICS_REFRESH_MS = 30_000;
 const MAIN_PLACEMENT_REFRESH_MS = 10_000;
+const CLOUD_SESSION_REFRESH_MS = 60_000;
 const HARDWARE_REFRESH_MS = 30_000;
 const AI_TOOL_SYNC_INTERVAL_MS = 5 * 60_000;
 const LIGHT_SETTINGS_PERSIST_DEBOUNCE_MS = 500;
@@ -284,6 +286,14 @@ export default function App() {
   }, [config.alwaysOnTop]);
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
+    void setLaunchAtLogin(config.launchAtLogin).catch(() => undefined);
+  }, [config.launchAtLogin]);
+
+  useEffect(() => {
     debouncedSaveConfig(config);
     return () => {
       debouncedSaveConfig.cancel();
@@ -332,6 +342,7 @@ export default function App() {
     let agentStatusTimer: number | undefined;
     let hardwareTimer: number | undefined;
     let leaderboardTimer: number | undefined;
+    let cloudSessionTimer: number | undefined;
     let aiToolSyncTimer: number | undefined;
 
     const refreshAiToolConnectors = () => {
@@ -356,6 +367,9 @@ export default function App() {
       }
       if (leaderboardTimer !== undefined) {
         window.clearInterval(leaderboardTimer);
+      }
+      if (cloudSessionTimer !== undefined) {
+        window.clearInterval(cloudSessionTimer);
       }
       if (aiToolSyncTimer !== undefined) {
         window.clearInterval(aiToolSyncTimer);
@@ -382,6 +396,9 @@ export default function App() {
       }, HARDWARE_REFRESH_MS);
       void refreshCloudSession();
       void refreshTokenLeaderboard();
+      cloudSessionTimer = window.setInterval(() => {
+        void refreshCloudSession();
+      }, CLOUD_SESSION_REFRESH_MS);
       leaderboardTimer = window.setInterval(() => {
         void refreshTokenLeaderboard();
       }, 60_000);
@@ -785,7 +802,10 @@ export default function App() {
           updateConfig({ alwaysOnTop: enabled });
           void setAlwaysOnTop(enabled);
         }}
-        onLaunchAtLoginChange={(enabled) => updateConfig({ launchAtLogin: enabled })}
+        onLaunchAtLoginChange={(enabled) => {
+          updateConfig({ launchAtLogin: enabled });
+          void setLaunchAtLogin(enabled);
+        }}
         onLightSettingsChange={(lightSettings) => updateConfig({ lightSettings })}
         onCloudConnect={connectCloud}
         onCloudRenameDisplayName={renameCloudDisplayName}

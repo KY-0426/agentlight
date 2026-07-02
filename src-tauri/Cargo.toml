@@ -15,3 +15,6 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 tauri = { version = "2", features = ["macos-private-api", "tray-icon"] }
 ureq = { version = "2", features = ["json"] }
 serialport = "4.7"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-autostart = "2"

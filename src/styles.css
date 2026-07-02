@@ -43,7 +43,7 @@ button:disabled {
   position: relative;
   width: 100%;
   height: 100%;
-  padding: 7px 9px 9px;
+  padding: 16px 9px 9px;
   display: grid;
   grid-template-rows: 1fr;
   gap: 0;
@@ -80,7 +80,6 @@ button:disabled {
   height: 100%;
   overflow: visible;
   pointer-events: auto;
-  contain: layout style paint;
 }
 
 .pet {

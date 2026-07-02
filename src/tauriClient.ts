@@ -1,4 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  disable as disableLaunchAtLogin,
+  enable as enableLaunchAtLogin,
+  isEnabled as isLaunchAtLoginEnabled,
+} from "@tauri-apps/plugin-autostart";
 import { USER_DISPLAY_NAME_MAX_LENGTH } from "@agent-light/shared";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -400,6 +405,26 @@ export async function setAlwaysOnTop(enabled: boolean): Promise<void> {
   await invoke("set_main_window_always_on_top", { enabled });
 }
 
+export async function getLaunchAtLoginEnabled(): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return false;
+  }
+
+  return isLaunchAtLoginEnabled();
+}
+
+export async function setLaunchAtLogin(enabled: boolean): Promise<void> {
+  if (!isTauriRuntime()) {
+    return;
+  }
+
+  if (enabled) {
+    await enableLaunchAtLogin();
+  } else {
+    await disableLaunchAtLogin();
+  }
+}
+
 export async function syncCodexAgentState(
   state: AgentState,
   message?: string | null,
@@ -644,15 +669,24 @@ export async function refreshCloudAccessToken(_session: CloudSession): Promise<C
     throw new Error("云端续期仅支持桌面客户端");
   }
 
-  return invoke<CloudSession>("refresh_cloud_session", { force: true });
+  try {
+    return await invoke<CloudSession>("refresh_cloud_session", { force: true });
+  } catch (error) {
+    const reloaded = await loadCloudSession();
+    if (reloaded && !isCloudAccessTokenExpiringSoon(reloaded)) {
+      return reloaded;
+    }
+    throw error;
+  }
 }
 
 export async function ensureCloudAccessToken(session: CloudSession): Promise<CloudSession> {
-  if (!isCloudAccessTokenExpiringSoon(session)) {
-    return session;
+  const latest = (await loadCloudSession()) ?? session;
+  if (!isCloudAccessTokenExpiringSoon(latest)) {
+    return latest;
   }
   if (!isTauriRuntime()) {
-    return session;
+    return latest;
   }
 
   return invoke<CloudSession>("refresh_cloud_session", { force: false });
